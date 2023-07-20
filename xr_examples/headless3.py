@@ -5,17 +5,15 @@ using higher level 3 pyopenxr API
 
 import ctypes
 import time
-import xr
-from xr.platform.windows_time import xr_time_now
+import xr.api3
 
 # Create instance for headless use
+# Enumerate the required instance extensions
+# XR_MND_HEADLESS_EXTENSION permits use without a graphics display
+extensions = [xr.MND_HEADLESS_EXTENSION_NAME]  # Permits use without a graphics display
+extensions.extend(xr.api3.TimeFetcher.required_extensions())
 instance = xr.create_instance(xr.InstanceCreateInfo(
-    # XR_MND_HEADLESS_EXTENSION permits use without a graphics display
-    enabled_extension_names=[
-        xr.MND_HEADLESS_EXTENSION_NAME,
-        # TODO: this time method is windows only
-        xr.KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME,
-    ],
+    enabled_extension_names=extensions,
 ))
 system = xr.get_system(
     instance,
@@ -120,6 +118,8 @@ reference_space = xr.create_reference_space(
     ),
 )
 
+time_fetcher = xr.api3.TimeFetcher(instance)
+
 session_state = xr.SessionState.UNKNOWN
 # Loop over session frames
 for frame_index in range(30):  # Limit number of frames for demo purposes
@@ -152,9 +152,7 @@ for frame_index in range(30):  # Limit number of frames for demo purposes
         xr.wait_frame(session=session)  # Helps SteamVR show application name better
         # Perform per-frame activities here
 
-        # kernel32.QueryPerformanceCounter(ctypes.byref(pc_time))
-        # xr_time_now = xrConvertWin32PerformanceCounterToTimeKHR(instance, pc_time)
-        time_now = xr_time_now(instance)
+        time_now = time_fetcher.time_now()
 
         active_action_set = xr.ActiveActionSet(
             action_set=action_set,
