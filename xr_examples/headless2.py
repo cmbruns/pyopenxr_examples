@@ -15,7 +15,6 @@ if platform.system() == "Windows":
     extensions.append(xr.KHR_WIN32_CONVERT_PERFORMANCE_COUNTER_TIME_EXTENSION_NAME)
 else:
     extensions.append(xr.KHR_CONVERT_TIMESPEC_TIME_EXTENSION_NAME)
-
 # Create instance for headless use
 instance = xr.create_instance(xr.InstanceCreateInfo(
     enabled_extension_names=extensions,
@@ -32,7 +31,6 @@ session = xr.create_session(
         next=None,  # No GraphicsBinding structure is required here in HEADLESS mode
     )
 )
-
 if platform.system() == "Windows":
     import ctypes.wintypes
     pc_time = ctypes.wintypes.LARGE_INTEGER()
@@ -59,7 +57,6 @@ if platform.system() == "Windows":
         return xr_time
 else:
     raise NotImplementedError  # TODO:
-
 # Set up controller tracking, as one possible legitimate headless activity
 action_set = xr.create_action_set(
     instance=instance,
@@ -149,7 +146,6 @@ reference_space = xr.create_reference_space(
         reference_space_type=xr.ReferenceSpaceType.STAGE,
     ),
 )
-
 session_state = xr.SessionState.UNKNOWN
 # Loop over session frames
 for frame_index in range(30):  # Limit number of frames for demo purposes
@@ -163,7 +159,6 @@ for frame_index in range(30):  # Limit number of frames for demo purposes
                     ctypes.byref(event_buffer),
                     ctypes.POINTER(xr.EventDataSessionStateChanged)).contents
                 session_state = xr.SessionState(event.state)
-                print(f"OpenXR session state changed to xr.SessionState.{session_state.name}")
                 if session_state == xr.SessionState.READY:
                     xr.begin_session(
                         session,
@@ -210,10 +205,8 @@ for frame_index in range(30):  # Limit number of frames for demo purposes
                 found_count += 1
         if found_count == 0:
             print("no controllers active")
-
         # Sleep periodically to avoid consuming all available system resources
         time.sleep(0.500)
-
 # Clean up
 system = xr.NULL_SYSTEM_ID
 xr.destroy_action_set(action_set)
