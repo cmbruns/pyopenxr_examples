@@ -7,11 +7,11 @@ import ctypes
 import time
 import xr.api3
 
-# Create instance for headless use
 # Enumerate the required instance extensions
 # XR_MND_HEADLESS_EXTENSION permits use without a graphics display
 extensions = [xr.MND_HEADLESS_EXTENSION_NAME]  # Permits use without a graphics display
 extensions.extend(xr.api3.TimeFetcher.required_extensions())
+# Create instance for headless use
 instance = xr.create_instance(xr.InstanceCreateInfo(
     enabled_extension_names=extensions,
 ))
@@ -28,161 +28,65 @@ session = xr.create_session(
     )
 )
 
-# Set up controller tracking, as one possible legitimate headless activity
-action_set = xr.create_action_set(
-    instance=instance,
-    create_info=xr.ActionSetCreateInfo(
-        action_set_name="action_set",
-        localized_action_set_name="Action Set",
-        priority=0,
-    ),
-)
-controller_paths = (xr.Path * 2)(
-    xr.string_to_path(instance, "/user/hand/left"),
-    xr.string_to_path(instance, "/user/hand/right"),
-)
-controller_pose_action = xr.create_action(
-    action_set=action_set,
-    create_info=xr.ActionCreateInfo(
-        action_type=xr.ActionType.POSE_INPUT,
-        action_name="controller_pose",
-        localized_action_name="Controller pose",
-        count_subaction_paths=len(controller_paths),
-        subaction_paths=controller_paths,
-    ),
-)
-suggested_bindings = (xr.ActionSuggestedBinding * 2)(
-    xr.ActionSuggestedBinding(
-        action=controller_pose_action,
-        binding=xr.string_to_path(
-            instance=instance,
-            path_string="/user/hand/left/input/grip/pose",
-        ),
-    ),
-    xr.ActionSuggestedBinding(
-        action=controller_pose_action,
-        binding=xr.string_to_path(
-            instance=instance,
-            path_string="/user/hand/right/input/grip/pose",
-        ),
-    ),
-)
-xr.suggest_interaction_profile_bindings(
-    instance=instance,
-    suggested_bindings=xr.InteractionProfileSuggestedBinding(
-        interaction_profile=xr.string_to_path(
-            instance,
-            "/interaction_profiles/khr/simple_controller",
-        ),
-        count_suggested_bindings=len(suggested_bindings),
-        suggested_bindings=suggested_bindings,
-    ),
-)
-xr.suggest_interaction_profile_bindings(
-    instance=instance,
-    suggested_bindings=xr.InteractionProfileSuggestedBinding(
-        interaction_profile=xr.string_to_path(
-            instance,
-            "/interaction_profiles/htc/vive_controller",
-        ),
-        count_suggested_bindings=len(suggested_bindings),
-        suggested_bindings=suggested_bindings,
-    ),
-)
-xr.attach_session_action_sets(
-    session=session,
-    attach_info=xr.SessionActionSetsAttachInfo(
-        action_sets=[action_set],
-    ),
-)
-action_spaces = [
-    xr.create_action_space(
+with xr.api3.TwoControllers(instance, session) as two_controllers:
+    time_fetcher = xr.api3.TimeFetcher(instance)
+
+    xr.attach_session_action_sets(
         session=session,
-        create_info=xr.ActionSpaceCreateInfo(
-            action=controller_pose_action,
-            subaction_path=controller_paths[0],
+        attach_info=xr.SessionActionSetsAttachInfo(
+            action_sets=[
+                two_controllers.action_set,
+            ],
         ),
-    ),
-    xr.create_action_space(
-        session=session,
-        create_info=xr.ActionSpaceCreateInfo(
-            action=controller_pose_action,
-            subaction_path=controller_paths[1],
-        ),
-    ),
-]
-reference_space = xr.create_reference_space(
-    session=session,
-    create_info=xr.ReferenceSpaceCreateInfo(
-        reference_space_type=xr.ReferenceSpaceType.STAGE,
-    ),
-)
+    )
 
-time_fetcher = xr.api3.TimeFetcher(instance)
+    session_state = xr.SessionState.UNKNOWN
+    # Loop over session frames
+    for frame_index in range(10):  # Limit number of frames for demo purposes
+        # Poll session state changed events
+        while True:
+            try:
+                event_buffer = xr.poll_event(instance)
+                event_type = xr.StructureType(event_buffer.type)
+                if event_type == xr.StructureType.EVENT_DATA_SESSION_STATE_CHANGED:
+                    event = ctypes.cast(
+                        ctypes.byref(event_buffer),
+                        ctypes.POINTER(xr.EventDataSessionStateChanged)).contents
+                    session_state = xr.SessionState(event.state)
+                    print(f"OpenXR session state changed to xr.SessionState.{session_state.name}")
+                    if session_state == xr.SessionState.READY:
+                        xr.begin_session(
+                            session,
+                            xr.SessionBeginInfo(
+                                # TODO: zero should be allowed here...
+                                primary_view_configuration_type=xr.ViewConfigurationType.PRIMARY_MONO,
+                            ),
+                        )
+                    elif session_state == xr.SessionState.STOPPING:
+                        xr.destroy_session(session)
+                        session = None
+            except xr.EventUnavailable:
+                break  # There is no event in the queue at this moment
+        if session_state == xr.SessionState.FOCUSED:
+            # wait_frame()/begin_frame()/end_frame() are not required in headless mode
+            xr.wait_frame(session=session)  # Helps SteamVR show application name better
+            # Perform per-frame activities here
 
-session_state = xr.SessionState.UNKNOWN
-# Loop over session frames
-for frame_index in range(30):  # Limit number of frames for demo purposes
-    # Poll session state changed events
-    while True:
-        try:
-            event_buffer = xr.poll_event(instance)
-            event_type = xr.StructureType(event_buffer.type)
-            if event_type == xr.StructureType.EVENT_DATA_SESSION_STATE_CHANGED:
-                event = ctypes.cast(
-                    ctypes.byref(event_buffer),
-                    ctypes.POINTER(xr.EventDataSessionStateChanged)).contents
-                session_state = xr.SessionState(event.state)
-                print(f"OpenXR session state changed to xr.SessionState.{session_state.name}")
-                if session_state == xr.SessionState.READY:
-                    xr.begin_session(
-                        session,
-                        xr.SessionBeginInfo(
-                            # TODO: zero should be allowed here...
-                            primary_view_configuration_type=xr.ViewConfigurationType.PRIMARY_MONO,
-                        ),
-                    )
-                elif session_state == xr.SessionState.STOPPING:
-                    xr.destroy_session(session)
-                    session = None
-        except xr.EventUnavailable:
-            break  # There is no event in the queue at this moment
-    if session_state == xr.SessionState.FOCUSED:
-        # wait_frame()/begin_frame()/end_frame() are not required in headless mode
-        xr.wait_frame(session=session)  # Helps SteamVR show application name better
-        # Perform per-frame activities here
+            time_now = time_fetcher.time_now()
 
-        time_now = time_fetcher.time_now()
+            found_count = 0
+            for index, space_location in two_controllers.enumerate_active_controllers(time_now):
+                if space_location.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
+                    print(f"Controller {index + 1}: {space_location.pose}")
+                    found_count += 1
+            if found_count == 0:
+                print("no controllers active")
 
-        active_action_set = xr.ActiveActionSet(
-            action_set=action_set,
-            subaction_path=xr.NULL_PATH,
-        )
-        xr.sync_actions(
-            session=session,
-            sync_info=xr.ActionsSyncInfo(
-                active_action_sets=[active_action_set],
-            ),
-        )
-        found_count = 0
-        for index, space in enumerate(action_spaces):
-            space_location = xr.locate_space(
-                space=space,
-                base_space=reference_space,
-                time=time_now,
-            )
-            if space_location.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
-                print(f"Controller {index + 1}: {space_location.pose}")
-                found_count += 1
-        if found_count == 0:
-            print("no controllers active")
-
-        # Sleep periodically to avoid consuming all available system resources
-        time.sleep(0.500)
+            # Sleep periodically to avoid consuming all available system resources
+            time.sleep(0.500)
 
 # Clean up
 system = xr.NULL_SYSTEM_ID
-xr.destroy_action_set(action_set)
 action_set = None
 xr.destroy_instance(instance)
 instance = None
