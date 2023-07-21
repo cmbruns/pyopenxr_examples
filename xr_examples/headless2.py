@@ -56,7 +56,27 @@ if platform.system() == "Windows":
             raise result
         return xr_time
 else:
-    raise NotImplementedError  # TODO:
+    # TODO: could this also work on windows?
+    timespecTime = xr.timespec()
+    pxrConvertTimespecTimeToTimeKHR = ctypes.cast(
+        xr.get_instance_proc_addr(
+            instance=instance,
+            name="xrConvertTimespecTimeToTimeKHR",
+        ),
+        xr.PFN_xrConvertTimespecTimeToTimeKHR,
+    )
+
+    def time_from_timespec(instance: xr.Instance, timespecTime: xr.timespec) -> xr.Time:
+        xr_time = xr.Time()
+        result = pxrConvertTimespecTimeToTimeKHR(
+            instance,
+            ctypes.pointer(timespecTime),
+            ctypes.byref(xr_time),
+        )
+        result = xr.check_result(result)
+        if result.is_exception():
+            raise result
+        return xr_time
 # Set up controller tracking, as one possible legitimate headless activity
 action_set = xr.create_action_set(
     instance=instance,
@@ -181,7 +201,10 @@ for frame_index in range(30):  # Limit number of frames for demo purposes
             kernel32.QueryPerformanceCounter(ctypes.byref(pc_time))
             xr_time_now = time_from_perf_counter(instance, pc_time)
         else:
-            raise NotImplementedError
+            time_float = time.clock_gettime(time.CLOCK_MONOTONIC)
+            timespecTime.tv_sec = int(time_float)
+            timespecTime.tv_nsec = int((time_float % 1) * 1e9)
+            xr_time_now = time_from_timespec(instance, timespecTime)
 
         active_action_set = xr.ActiveActionSet(
             action_set=action_set,
