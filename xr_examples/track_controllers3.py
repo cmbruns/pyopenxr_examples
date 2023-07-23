@@ -1,6 +1,8 @@
 """
-pyopenxr headless example
-using higher level 3 pyopenxr API convenience functions
+pyopenxr controller tracking example
+using higher level 3 pyopenxr API convenience functions.
+
+see also headless3.py, if your openxr runtime has the XR_MND_headless extension
 """
 
 import time
@@ -8,67 +10,77 @@ import xr.api3
 
 # Enumerate the required instance extensions
 extensions = xr.api3.OpenGLGraphics.required_extensions()
+# Create several context managers to automatically handle clean up.
+# Place them all on one logical line, to minimize indentation.
 # InstanceManager automatically destroys our OpenXR instance when we are done
-with xr.api3.InstanceManager(create_info=xr.InstanceCreateInfo(
-    enabled_extension_names=extensions,
-)) as instance:
-    system = xr.get_system(
-        instance,
-        xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
-    )
-    with xr.api3.OpenGLGraphics(instance, system) as graphics:
-        with xr.api3.SessionManager(
-            instance,
-            xr.SessionCreateInfo(
-                system_id=system,
+with xr.api3.InstanceManager(
+        create_info=xr.InstanceCreateInfo(
+            enabled_extension_names=extensions,
+        )
+) as instance, \
+        xr.api3.SystemManager(
+            instance=instance,
+            get_info=xr.SystemGetInfo(
+                form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY,
+            )
+        ) as system_id, \
+        xr.api3.OpenGLGraphics(
+            instance=instance,
+            system_id=system_id,
+        ) as graphics, \
+        xr.api3.SessionManager(
+            instance=instance,
+            create_info=xr.SessionCreateInfo(
+                system_id=system_id,
                 next=graphics.graphics_binding_pointer,
             )
-        ) as session:
-            # graphics.create_swapchains(session)
-            with xr.api3.TwoControllers(instance, session) as two_controllers:
-                xr.attach_session_action_sets(
-                    session=session,
-                    attach_info=xr.SessionActionSetsAttachInfo(
-                        action_sets=[two_controllers.action_set],
-                    ),
+        ) as session, \
+        xr.api3.TwoControllers(
+            instance=instance,
+            session=session) as two_controllers:
+    xr.attach_session_action_sets(
+        session=session,
+        attach_info=xr.SessionActionSetsAttachInfo(
+            action_sets=[two_controllers.action_set],
+        ),
+    )
+    # Set up event handling to track session state
+    event_bus = xr.api3.EventBus()
+    xr_event_generator = xr.api3.XrEventGenerator(instance)
+    session_status = xr.api3.SessionStatus(
+        session=session,
+        event_source=event_bus,
+        begin_info=xr.SessionBeginInfo(
+            primary_view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
+        ),
+    )
+    # Loop over the session frames
+    for frame_index in range(20):  # Limit to 20 total frames for demo purposes
+        xr_event_generator.poll_events(destination=event_bus)
+        if session_status.state in [
+            xr.SessionState.READY,
+            xr.SessionState.SYNCHRONIZED,
+            xr.SessionState.VISIBLE,
+            xr.SessionState.FOCUSED,
+        ]:
+            frame_state = xr.wait_frame(session)
+            xr.begin_frame(session)
+            if session_status.state == xr.SessionState.FOCUSED:
+                # Get controller poses
+                found_count = 0
+                for index, space_location in two_controllers.enumerate_active_controllers(frame_state.predicted_display_time):
+                    if space_location.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
+                        print(f"Controller {index + 1}: {space_location.pose}")
+                        found_count += 1
+                if found_count == 0:
+                    print("no controllers active")
+            # Sleep periodically to avoid consuming all available system resources
+            time.sleep(0.500)
+            xr.end_frame(
+                session=session,
+                frame_end_info=xr.FrameEndInfo(
+                    display_time=frame_state.predicted_display_time,
+                    environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE,
+                    layers=None,
                 )
-                # Set up event handling to track session state
-                event_bus = xr.api3.EventBus()
-                xr_event_generator = xr.api3.XrEventGenerator(instance)
-                session_status = xr.api3.SessionStatus(
-                    session=session,
-                    event_source=event_bus,
-                    begin_info=xr.SessionBeginInfo(
-                        primary_view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
-                    ),
-                )
-                # Loop over the session frames
-                for frame_index in range(20):  # Limit to 20 total frames for demo purposes
-                    xr_event_generator.poll_events(destination=event_bus)
-                    if session_status.state in [
-                        xr.SessionState.READY,
-                        xr.SessionState.SYNCHRONIZED,
-                        xr.SessionState.VISIBLE,
-                        xr.SessionState.FOCUSED,
-                    ]:
-                        frame_state = xr.wait_frame(session)
-                        xr.begin_frame(session)
-                        if session_status.state == xr.SessionState.FOCUSED:
-                            # Get controller poses
-                            found_count = 0
-                            for index, space_location in two_controllers.enumerate_active_controllers(frame_state.predicted_display_time):
-                                if space_location.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
-                                    print(f"Controller {index + 1}: {space_location.pose}")
-                                    found_count += 1
-                            if found_count == 0:
-                                print("no controllers active")
-                        # Sleep periodically to avoid consuming all available system resources
-                        time.sleep(0.500)
-                        xr.end_frame(
-                            session=session,
-                            frame_end_info=xr.FrameEndInfo(
-                                display_time=frame_state.predicted_display_time,
-                                environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE,
-                                layers=None,
-                            )
-                        )
+            )
