@@ -56,7 +56,6 @@ if platform.system() == "Windows":
             raise result
         return xr_time
 else:
-    # TODO: could this also work on windows?
     timespecTime = xr.timespec()
     pxrConvertTimespecTimeToTimeKHR = ctypes.cast(
         xr.get_instance_proc_addr(
@@ -66,11 +65,11 @@ else:
         xr.PFN_xrConvertTimespecTimeToTimeKHR,
     )
 
-    def time_from_timespec(instance: xr.Instance, timespecTime: xr.timespec) -> xr.Time:
+    def time_from_timespec(instance: xr.Instance, timespec_time: xr.timespec) -> xr.Time:
         xr_time = xr.Time()
         result = pxrConvertTimespecTimeToTimeKHR(
             instance,
-            ctypes.pointer(timespecTime),
+            ctypes.pointer(timespec_time),
             ctypes.byref(xr_time),
         )
         result = xr.check_result(result)
