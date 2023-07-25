@@ -4,15 +4,15 @@ using higher level 3 pyopenxr API convenience functions
 """
 
 import time
-import xr.api3
+import xr.api2
 
 # Enumerate the required instance extensions
 # XR_MND_HEADLESS_EXTENSION permits use without a graphics display
 extensions = [xr.MND_HEADLESS_EXTENSION_NAME]
 # We will use a TimeFetcher object, which requires certain extensions
-extensions.extend(xr.api3.TimeFetcher.required_extensions())
+extensions.extend(xr.api2.TimeFetcher.required_extensions())
 # InstanceManager automatically destroys our OpenXR instance when we are done
-with xr.api3.InstanceManager(create_info=xr.InstanceCreateInfo(
+with xr.Instance(create_info=xr.InstanceCreateInfo(
     enabled_extension_names=extensions,
 )) as instance:
     system = xr.get_system(
@@ -20,14 +20,14 @@ with xr.api3.InstanceManager(create_info=xr.InstanceCreateInfo(
         # Presumably the form factor is irrelevant in headless mode...
         xr.SystemGetInfo(form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY),
     )
-    with xr.api3.SessionManager(
+    with xr.Session(
         instance,
         xr.SessionCreateInfo(
             system_id=system,
             next=None,  # No GraphicsBinding structure is required here in HEADLESS mode
         )
     ) as session:
-        with xr.api3.TwoControllers(instance, session) as two_controllers:
+        with xr.api2.TwoControllers(instance, session) as two_controllers:
             xr.attach_session_action_sets(
                 session=session,
                 attach_info=xr.SessionActionSetsAttachInfo(
@@ -35,11 +35,11 @@ with xr.api3.InstanceManager(create_info=xr.InstanceCreateInfo(
                 ),
             )
             # In headless mode we will need to get time values without frame_info.predicted_display_time
-            time_fetcher = xr.api3.TimeFetcher(instance)
+            time_fetcher = xr.api2.TimeFetcher(instance)
             # Set up event handling to track session state
-            event_bus = xr.api3.EventBus()
-            xr_event_generator = xr.api3.XrEventGenerator(instance)
-            session_status = xr.api3.SessionStatus(
+            event_bus = xr.api2.EventBus()
+            xr_event_generator = xr.api2.XrEventGenerator(instance)
+            session_status = xr.api2.SessionStatus(
                 session=session,
                 event_source=event_bus,
                 begin_info=xr.SessionBeginInfo(),
