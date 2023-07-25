@@ -6,36 +6,36 @@ see also headless3.py, if your openxr runtime has the XR_MND_headless extension
 """
 
 import time
-import xr.api3
+import xr.api2
 
 # Enumerate the required instance extensions
-extensions = xr.api3.OpenGLGraphics.required_extensions()
+extensions = xr.api2.GLFWContext.required_extensions()
 # Create several context managers to automatically handle clean up.
 # Place them all on one logical line, to minimize indentation.
 # InstanceManager automatically destroys our OpenXR instance when we are done
-with xr.api3.InstanceManager(
+with xr.Instance(
         create_info=xr.InstanceCreateInfo(
             enabled_extension_names=extensions,
         )
 ) as instance, \
-        xr.api3.SystemManager(
+        xr.SystemId(
             instance=instance,
             get_info=xr.SystemGetInfo(
                 form_factor=xr.FormFactor.HEAD_MOUNTED_DISPLAY,
             )
         ) as system_id, \
-        xr.api3.OpenGLGraphics(
+        xr.api2.GLFWContext(
             instance=instance,
             system_id=system_id,
         ) as graphics, \
-        xr.api3.SessionManager(
+        xr.Session(
             instance=instance,
             create_info=xr.SessionCreateInfo(
                 system_id=system_id,
                 next=graphics.graphics_binding_pointer,
             )
         ) as session, \
-        xr.api3.TwoControllers(
+        xr.api2.TwoControllers(
             instance=instance,
             session=session) as two_controllers:
     xr.attach_session_action_sets(
@@ -45,9 +45,9 @@ with xr.api3.InstanceManager(
         ),
     )
     # Set up event handling to track session state
-    event_bus = xr.api3.EventBus()
-    xr_event_generator = xr.api3.XrEventGenerator(instance)
-    session_status = xr.api3.SessionStatus(
+    event_bus = xr.api2.EventBus()
+    xr_event_generator = xr.api2.XrEventGenerator(instance)
+    session_status = xr.api2.SessionStatus(
         session=session,
         event_source=event_bus,
         begin_info=xr.SessionBeginInfo(
