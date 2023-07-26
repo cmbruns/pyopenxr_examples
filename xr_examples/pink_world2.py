@@ -3,6 +3,7 @@ pyopenxr example program pink_world2.py
 This example renders a solid pink field to each eye.
 """
 
+import time
 from OpenGL import GL
 import xr.api2
 
@@ -44,22 +45,26 @@ with xr.Instance(create_info=xr.InstanceCreateInfo(
                     ),
                 )
                 # Loop over the session frames
-                for frame_index in range(200):  # Limit to 20 total frames for demo purposes
+                frame_index = 0
+                while True:
+                    frame_index += 1
+                    if frame_index > 200:
+                        xr.request_exit_session(session)
                     xr_event_generator.poll_events(destination=event_bus)
-                    if session_status.state in [
-                        xr.SessionState.READY,
-                        xr.SessionState.SYNCHRONIZED,
-                        xr.SessionState.VISIBLE,
-                        xr.SessionState.FOCUSED,
-                    ]:
+                    if session_status.exit_frame_loop:
+                        break
+                    elif session_status.state == xr.SessionState.IDLE:
+                        time.sleep(0.200)  # minimize resource consumption while idle
+                    elif session_status.is_running:
                         frame_state = xr.wait_frame(session)
                         xr.begin_frame(session)
                         render_layers = []
-                        for view_index, view in swapchains.enumerate_views(frame_state, render_layers):
-                            # Pink stuff here
-                            gl_context.make_current()
-                            GL.glClearColor(1, 0.7, 0.7, 1)  # pink
-                            GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+                        if frame_state.should_render:
+                            for view in swapchains.views(frame_state, render_layers):
+                                # Pink stuff here
+                                gl_context.make_current()
+                                GL.glClearColor(1, 0.7, 0.7, 1)  # pink
+                                GL.glClear(GL.GL_COLOR_BUFFER_BIT)
                         xr.end_frame(
                             session=session,
                             frame_end_info=xr.FrameEndInfo(
@@ -68,7 +73,3 @@ with xr.Instance(create_info=xr.InstanceCreateInfo(
                                 layers=render_layers,
                             ),
                         )
-                        # Pink stuff here
-                        gl_context.make_current()
-                        GL.glClearColor(1, 0.7, 0.7, 1)  # pink
-                        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
