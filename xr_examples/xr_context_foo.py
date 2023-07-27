@@ -7,23 +7,6 @@ import xr.api2
 import time
 
 
-class HeadlessFrameManager(object):
-    """
-    Headless version of context manager for a single OpenXR frame.
-    """
-    def __init__(self, session_manager):
-        self.session_manager = session_manager
-        self.frame_state = None
-
-    def __enter__(self):
-        session = self.session_manager.session
-        self.frame_state = xr.wait_frame(session)
-        return self
-
-    def __exit__(self, _exc_type, _exc_val, _exc_tb):
-        pass
-
-
 class FrameManager(object):
     """
     Context manager for a single OpenXR frame:
@@ -37,21 +20,25 @@ class FrameManager(object):
     def __enter__(self):
         session = self.session_manager.session
         self.frame_state = xr.wait_frame(session)
-        xr.begin_frame(session)
-        self.render_layers.clear()
+        if not self.session_manager.is_headless:
+            xr.begin_frame(session)
+            self.render_layers.clear()
         return self
 
     def __exit__(self, _exc_type, _exc_val, _exc_tb):
-        xr.end_frame(
-            session=self.session_manager.session,
-            frame_end_info=xr.FrameEndInfo(
-                display_time=self.frame_state.predicted_display_time,
-                environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE,
-                layers=self.render_layers,
-            ),
-        )
+        if not self.session_manager.is_headless:
+            xr.end_frame(
+                session=self.session_manager.session,
+                frame_end_info=xr.FrameEndInfo(
+                    display_time=self.frame_state.predicted_display_time,
+                    environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE,
+                    layers=self.render_layers,
+                ),
+            )
 
     def views(self):
+        if self.session_manager.is_headless:
+            return
         swapchains = self.session_manager.swapchains
         if swapchains is None:
             return
@@ -95,12 +82,8 @@ class SessionManager(xr.api2.ISubscriber):
             if self.exit_frame_loop:
                 break
             if self.is_running:
-                if self.is_headless:
-                    with HeadlessFrameManager(self) as frame:
-                        time.sleep(0.050)
-                else:
-                    with FrameManager(self) as frame:
-                        time.sleep(0.050)
+                with FrameManager(self) as frame:
+                    time.sleep(0.050)
 
     def frames(self):
         while True:
@@ -110,14 +93,10 @@ class SessionManager(xr.api2.ISubscriber):
             elif self.session_state == xr.SessionState.IDLE:
                 time.sleep(0.200)  # minimize resource consumption while idle
             elif self.is_running:
-                if self.is_headless:
-                    with HeadlessFrameManager(self) as frame:
-                        yield frame
-                else:
-                    with FrameManager(self) as frame:
-                        yield frame
+                with FrameManager(self) as frame:
+                    yield frame
 
-    def notify(self, event_key, event_data) -> None:
+    def handle_event(self, event_key, event_data) -> None:
         """
         Respond to OpenXR session state change events
         :param event_key: event type
@@ -154,7 +133,7 @@ class SessionManager(xr.api2.ISubscriber):
 
 class XrContext(object):
     def __init__(self, renderers=[], actioners=[]):
-        # Choose instance exceptions
+        # Choose instance extensions
         available_extensions = xr.enumerate_instance_extension_properties()
         extensions = []
         graphics_extension = None
@@ -169,7 +148,6 @@ class XrContext(object):
         extensions.append(graphics_extension)
         if graphics_extension == xr.MND_HEADLESS_EXTENSION_NAME:
             extensions.extend(xr.api2.TimeFetcher.required_extensions())
-        print(extensions)
         self.instance_create_info = xr.InstanceCreateInfo(
             enabled_extension_names=extensions,
         )
@@ -184,7 +162,11 @@ class XrContext(object):
                         next=None,  # TODO
                     ),
             ) as session:
-                with SessionManager(instance, session, is_headless=self.is_headless) as session_manager:
+                with SessionManager(
+                        instance=instance,
+                        session=session,
+                        is_headless=self.is_headless
+                ) as session_manager:
                     for frame in session_manager.frames():
                         yield frame
 
