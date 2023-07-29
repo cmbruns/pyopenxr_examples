@@ -2,12 +2,12 @@
 Prototype for future high level api constructs in pyopenxr.
 """
 
-import abc
 import ctypes
 from typing import Generator
 
+from OpenGL import GL
+
 import xr.api2
-import time
 
 
 class FrameManager(object):
@@ -70,25 +70,29 @@ class SessionManager(xr.api2.ISubscriber):
     def __init__(
             self,
             instance: xr.Instance,
+            system_id: xr.SystemId,
             session: xr.Session,
             begin_info: xr.SessionBeginInfo = None,
-            is_headless=False
+            is_headless=False,
+            swapchains=None,
     ) -> None:
         self.is_headless = is_headless
         self.instance = instance
         self.session = session
         if begin_info is None:
-            # PRIMARY_STEREO is NOT the SessionBeginInfo constructor default...
-            # Maybe it should be? But what about cell phones?
+            view_configurations = xr.enumerate_view_configurations(instance=instance, system_id=system_id)
+            view_configuration_type = xr.ViewConfigurationType.PRIMARY_STEREO
+            if view_configuration_type not in view_configurations:
+                view_configuration_type = view_configurations[0]
             begin_info = xr.SessionBeginInfo(
-                primary_view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
+                primary_view_configuration_type=view_configuration_type,
             )
         self._begin_info = begin_info
         self.event_bus = xr.api2.EventBus()  # TODO: this event bus should be shared
         self.is_running = False
         self.exit_frame_loop = False
         self.session_state = xr.SessionState.UNKNOWN
-        self.swapchains = None  # TODO:
+        self.swapchains = swapchains
         self.event_bus.subscribe(
             event_key=xr.StructureType.EVENT_DATA_SESSION_STATE_CHANGED,
             subscriber=self,
@@ -194,60 +198,73 @@ class XrContext(object):
         self.instance_create_info = xr.InstanceCreateInfo(
             enabled_extension_names=extensions,
         )
+        self.instance = None
+        self.system_id = None
+        self.session = None
+        self.graphics_context = None
 
     def frames(self) -> Generator[FrameManager, None, None]:
         """
         The OpenXR frame loop.
         """
-        with xr.Instance(self.instance_create_info) as instance:
-            system_id = xr.get_system(instance)
+        with xr.Instance(self.instance_create_info) as self.instance:
+            self.system_id = xr.get_system(self.instance)
             if self.is_headless:
-                for frame in self._headless_session_frames(instance, system_id):
+                for frame in self._headless_session_frames():
                     yield frame
             else:
-                for frame in self._opengl_session_frames(instance, system_id):
+                for frame in self._opengl_session_frames():
                     yield frame
 
-    def _headless_session_frames(self, instance, system_id) -> Generator[FrameManager, None, None]:
+    def _headless_session_frames(self) -> Generator[FrameManager, None, None]:
         """
         One fragment of the context manager chain; separated for easier dynamic composition.
         """
         with xr.Session(
-                instance=instance,
+                instance=self.instance,
                 create_info=xr.SessionCreateInfo(
-                    system_id=system_id,
-                    next=None,  # TODO
+                    system_id=self.system_id,
+                    next=None,
                 ),
-        ) as session:
-            for frame in self._session_manager_frames(instance, session):
+        ) as self.session:
+            for frame in self._session_manager_frames():
                 yield frame
 
-    def _opengl_session_frames(self, instance, system_id) -> Generator[FrameManager, None, None]:
+    def _opengl_session_frames(self) -> Generator[FrameManager, None, None]:
         """
         One fragment of the context manager chain; separated for easier dynamic composition.
         """
         with xr.api2.GLFWContext(
-                instance=instance,
-                system_id=system_id,
-        ) as gl_context:
+                instance=self.instance,
+                system_id=self.system_id,
+        ) as self.graphics_context:
             with xr.Session(
-                    instance=instance,
+                    instance=self.instance,
                     create_info=xr.SessionCreateInfo(
-                        system_id=system_id,
-                        next=gl_context.graphics_binding_pointer,
+                        system_id=self.system_id,
+                        next=self.graphics_context.graphics_binding_pointer,
                     ),
-            ) as session:
-                for frame in self._session_manager_frames(instance, session):
-                    yield frame
+            ) as self.session:
+                with xr.api2.XrSwapchains(
+                        instance=self.instance,
+                        system_id=self.system_id,
+                        session=self.session,
+                        context=self.graphics_context,
+                        view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
+                ) as self.swapchains:
+                    for frame in self._session_manager_frames():
+                        yield frame
 
-    def _session_manager_frames(self, instance, session) -> Generator[FrameManager, None, None]:
+    def _session_manager_frames(self) -> Generator[FrameManager, None, None]:
         """
         One fragment of the context manager chain; separated for easier dynamic composition.
         """
         with SessionManager(
-                instance=instance,
-                session=session,
-                is_headless=self.is_headless
+            instance=self.instance,
+            system_id=self.system_id,
+            session=self.session,
+            is_headless=self.is_headless,
+            swapchains=self.swapchains,
         ) as session_manager:
             for frame in session_manager.frames():
                 yield frame
@@ -260,10 +277,11 @@ def main():
       * KeyboardInterrupt but cleanly wind down session state
       * close window and cleanly wind down session state
     """
-    for frame_index, frame in enumerate(XrContext().frames()):
-        time.sleep(0.500)
-        print(frame_index)
-        if frame_index > 10:
+    for frame_index, frame in enumerate(XrContext(graphics_extension=xr.KHR_OPENGL_ENABLE_EXTENSION_NAME).frames()):
+        for view in frame.views():
+            GL.glClearColor(1, 0.7, 0.7, 1)  # pink
+            GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        if frame_index > 100:
             break
 
 
