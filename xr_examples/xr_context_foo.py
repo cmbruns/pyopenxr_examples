@@ -2,8 +2,8 @@
 Prototype for future high level api constructs in pyopenxr.
 """
 
-import abc
 import ctypes
+import time
 from typing import Generator
 
 from OpenGL import GL
@@ -283,17 +283,39 @@ def main():
       * KeyboardInterrupt but cleanly wind down session state
       * close window and cleanly wind down session state
     """
-    with XrContext(graphics_extension=xr.KHR_OPENGL_ENABLE_EXTENSION_NAME) as context:
+    with XrContext(
+            graphics_extension=xr.KHR_OPENGL_ENABLE_EXTENSION_NAME,
+            # graphics_extension=xr.MND_HEADLESS_EXTENSION_NAME,
+    ) as context:
+        instance, session = context.instance, context.session
         pink_world = PinkWorld()
-        for frame_index, frame in enumerate(context.frames()):
-            if frame_index > 500:
-                break
-            if frame.session_state == xr.SessionState.FOCUSED:
-                pass  # TODO controllers
-            if frame.frame_state.should_render:
-                for _view in frame.views():
-                    context.graphics_context.make_current()
-                    pink_world.render_scene()
+        with xr.api2.TwoControllers(
+            instance=instance,
+            session=session,
+        ) as two_controllers:
+            xr.attach_session_action_sets(
+                session=session,
+                attach_info=xr.SessionActionSetsAttachInfo(
+                    action_sets=[two_controllers.action_set],
+                ),
+            )
+            for frame_index, frame in enumerate(context.frames()):
+                if frame_index > 500:
+                    break
+                if frame.session_state == xr.SessionState.FOCUSED:
+                    # Get controller poses
+                    found_count = 0
+                    for index, space_location in two_controllers.enumerate_active_controllers(
+                            frame.frame_state.predicted_display_time):
+                        if space_location.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
+                            print(f"Controller {index + 1}: {space_location.pose}")
+                            found_count += 1
+                    if found_count == 0:
+                        print("no controllers active")
+                if frame.frame_state.should_render:
+                    for _view in frame.views():
+                        context.graphics_context.make_current()
+                        pink_world.render_scene()
 
 
 if __name__ == "__main__":
