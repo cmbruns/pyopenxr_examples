@@ -2,6 +2,7 @@
 Prototype for future high level api constructs in pyopenxr.
 """
 
+import abc
 import ctypes
 from typing import Generator
 
@@ -57,6 +58,10 @@ class FrameManager(object):
             return
         for view in swapchains.views(self.frame_state, self.render_layers):
             yield view
+
+    @property
+    def session_state(self) -> xr.SessionState:
+        return self.session_manager.session_state
 
 
 class SessionManager(xr.api2.ISubscriber):
@@ -182,6 +187,7 @@ class XrContext(object):
     def __init__(self, renderers=(), _actioners=(), graphics_extension=None):
         # TODO: take arguments for optional create_info objects
         # Choose instance extensions
+        self.renderers = renderers
         available_extensions = xr.enumerate_instance_extension_properties()
         if graphics_extension is None:
             if len(renderers) == 0:
@@ -269,6 +275,22 @@ class XrContext(object):
             for frame in session_manager.frames():
                 yield frame
 
+    def render(self):
+        for renderer in self.renderers:
+            renderer.render_scene()
+
+
+class IRendererGL(abc.ABC):
+    @abc.abstractmethod
+    def render_scene(self):
+        pass
+
+
+class PinkWorld(IRendererGL):
+    def render_scene(self):
+        GL.glClearColor(1, 0.7, 0.7, 1)  # pink
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+
 
 def main():
     """
@@ -277,12 +299,18 @@ def main():
       * KeyboardInterrupt but cleanly wind down session state
       * close window and cleanly wind down session state
     """
-    for frame_index, frame in enumerate(XrContext(graphics_extension=xr.KHR_OPENGL_ENABLE_EXTENSION_NAME).frames()):
-        for view in frame.views():
-            GL.glClearColor(1, 0.7, 0.7, 1)  # pink
-            GL.glClear(GL.GL_COLOR_BUFFER_BIT)
-        if frame_index > 100:
+    context = XrContext(
+        graphics_extension=xr.KHR_OPENGL_ENABLE_EXTENSION_NAME,
+        renderers=[PinkWorld()],
+    )
+    for frame_index, frame in enumerate(context.frames()):
+        if frame_index > 500:
             break
+        if frame.session_state == xr.SessionState.FOCUSED:
+            pass  # TODO controllers
+        if frame.frame_state.should_render:
+            for view in frame.views():
+                context.render()
 
 
 if __name__ == "__main__":
