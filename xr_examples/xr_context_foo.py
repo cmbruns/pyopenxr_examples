@@ -3,6 +3,7 @@ Prototype for future high level api constructs in pyopenxr.
 """
 
 import ctypes
+import sys
 import time
 from typing import Generator
 
@@ -184,61 +185,92 @@ class XrContext(object):
     High level api2 pyopenxr class used to automatically initialize the
     session, state, system, etc., and run the frame loop.
     """
-    def __init__(self, graphics_extension=None):
+    def __init__(
+            self,
+            instance_create_info: xr.InstanceCreateInfo = None,
+            system_get_info: xr.SystemGetInfo = None,
+            session_create_info: xr.SessionCreateInfo = None,
+            reference_space_type: xr.ReferenceSpaceType = xr.ReferenceSpaceType.STAGE,
+    ) -> None:
         # TODO: take arguments for optional create_info objects
-        self.graphics_extension = graphics_extension
-        self.instance_create_info = xr.InstanceCreateInfo(
-            enabled_extension_names=[graphics_extension],
-        )
+        if instance_create_info is None:
+            instance_create_info = xr.InstanceCreateInfo(
+                enabled_extension_names=[xr.KHR_OPENGL_ENABLE_EXTENSION_NAME],
+            )
+        enabled = [n.decode() for n in instance_create_info.enabled_extension_names]
+        if xr.KHR_OPENGL_ENABLE_EXTENSION_NAME in enabled:
+            self.graphics_extension = xr.KHR_OPENGL_ENABLE_EXTENSION_NAME
+        elif xr.MND_HEADLESS_EXTENSION_NAME in enabled:
+            self.graphics_extension = xr.MND_HEADLESS_EXTENSION_NAME
+        else:
+            raise NotImplementedError
+        self.instance_create_info = instance_create_info
+        if system_get_info is None:
+            system_get_info = xr.SystemGetInfo()
+        self.system_get_info = system_get_info
+        if session_create_info is None:
+            session_create_info = xr.SessionCreateInfo()
+        self.reference_space_type = reference_space_type
+        self.session_create_info = session_create_info
         self.instance = None
         self.system_id = None
         self.graphics_context = None
         self.session = None
+        self.reference_space = None
         self.swapchains = None
         self.session_manager = None
 
     def __enter__(self):
-        # Chain many dependent context managers
-        self.instance = xr.Instance(self.instance_create_info).__enter__()
-        self.system_id = xr.get_system(self.instance)
-        graphics_binding_pointer = None
-        if self.graphics_extension == xr.MND_HEADLESS_EXTENSION_NAME:
-            graphics_binding_pointer = None
-        elif self.graphics_extension == xr.KHR_OPENGL_ENABLE_EXTENSION_NAME:
-            self.graphics_context = xr.api2.GLFWContext(
+        try:
+            # Chain many dependent context managers
+            self.instance = xr.Instance(self.instance_create_info).__enter__()
+            self.system_id = xr.get_system(self.instance, self.system_get_info)
+            if self.graphics_extension == xr.MND_HEADLESS_EXTENSION_NAME:
+                graphics_binding_pointer = None
+            elif self.graphics_extension == xr.KHR_OPENGL_ENABLE_EXTENSION_NAME:
+                self.graphics_context = xr.api2.GLFWContext(
+                    instance=self.instance,
+                    system_id=self.system_id,
+                ).__enter__()
+                graphics_binding_pointer = self.graphics_context.graphics_binding_pointer
+            else:
+                raise NotImplementedError  # More graphics contexts!
+            self.session_create_info.system_id = self.system_id
+            self.session_create_info.next = graphics_binding_pointer
+            self.session = xr.Session(
                 instance=self.instance,
-                system_id=self.system_id,
+                create_info=self.session_create_info,
             ).__enter__()
-            graphics_binding_pointer = self.graphics_context.graphics_binding_pointer
-        else:
-            raise NotImplementedError  # More graphics contexts!
-        self.session = xr.Session(
-            instance=self.instance,
-            create_info=xr.SessionCreateInfo(
-                system_id=self.system_id,
-                next=graphics_binding_pointer,
-            ),
-        ).__enter__()
-        if self.graphics_extension == xr.MND_HEADLESS_EXTENSION_NAME:
-            self.swapchains = None
-        elif self.graphics_extension == xr.KHR_OPENGL_ENABLE_EXTENSION_NAME:
-            self.swapchains = xr.api2.XrSwapchains(
+            self.reference_space = xr.create_reference_space(
+                session=self.session,
+                create_info=xr.ReferenceSpaceCreateInfo(
+                    reference_space_type=self.reference_space_type,
+                ),
+            )
+            if self.graphics_extension == xr.MND_HEADLESS_EXTENSION_NAME:
+                self.swapchains = None
+            elif self.graphics_extension == xr.KHR_OPENGL_ENABLE_EXTENSION_NAME:
+                self.swapchains = xr.api2.XrSwapchains(
+                    instance=self.instance,
+                    system_id=self.system_id,
+                    session=self.session,
+                    context=self.graphics_context,
+                    view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
+                    reference_space=self.reference_space,
+                ).__enter__()
+            else:
+                raise NotImplementedError  # More graphics contexts!
+            self.session_manager = SessionManager(
                 instance=self.instance,
                 system_id=self.system_id,
                 session=self.session,
-                context=self.graphics_context,
-                view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
+                is_headless=self.graphics_extension == xr.MND_HEADLESS_EXTENSION_NAME,
+                swapchains=self.swapchains,
             ).__enter__()
-        else:
-            raise NotImplementedError  # More graphics contexts!
-        self.session_manager = SessionManager(
-            instance=self.instance,
-            system_id=self.system_id,
-            session=self.session,
-            is_headless=self.graphics_extension == xr.MND_HEADLESS_EXTENSION_NAME,
-            swapchains=self.swapchains,
-        ).__enter__()
-        return self
+            return self
+        except BaseException:
+            self.__exit__(*sys.exc_info())
+            raise
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         # Unwind chained context managers in reverse order of creation
@@ -248,6 +280,9 @@ class XrContext(object):
         if self.swapchains is not None:
             self.swapchains.__exit__(exc_type, exc_val, exc_tb)
             self.swapchains = None
+        if self.reference_space is None:
+            xr.destroy_space(space=self.reference_space)
+            self.reference_space = None
         if self.session is not None:
             self.session.__exit__(exc_type, exc_val, exc_tb)
             self.session = None
@@ -264,34 +299,26 @@ class XrContext(object):
         The OpenXR frame loop.
         """
         if self.session_manager is None:
-            return
-        for frame in self.session_manager.frames():
-            yield frame
-
-
-class PinkWorld(object):
-    @staticmethod
-    def render_scene():
-        GL.glClearColor(1, 0.7, 0.7, 1)  # pink
-        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+            with self:
+                for frame in self.session_manager.frames():
+                    yield frame
+        else:
+            for frame in self.session_manager.frames():
+                yield frame
 
 
 def main():
-    """
-    Things to test:
-      * break in client but cleanly wind down session state
-      * KeyboardInterrupt but cleanly wind down session state
-      * close window and cleanly wind down session state
-    """
     with XrContext(
-            graphics_extension=xr.KHR_OPENGL_ENABLE_EXTENSION_NAME,
-            # graphics_extension=xr.MND_HEADLESS_EXTENSION_NAME,
+        instance_create_info=xr.InstanceCreateInfo(enabled_extension_names=[
+            xr.KHR_OPENGL_ENABLE_EXTENSION_NAME,
+            # xr.MND_HEADLESS_EXTENSION_NAME,
+        ]),
     ) as context:
         instance, session = context.instance, context.session
-        pink_world = PinkWorld()
         with xr.api2.TwoControllers(
             instance=instance,
             session=session,
+            reference_space=context.reference_space,
         ) as two_controllers:
             xr.attach_session_action_sets(
                 session=session,
@@ -314,8 +341,8 @@ def main():
                         print("no controllers active")
                 if frame.frame_state.should_render:
                     for _view in frame.views():
-                        context.graphics_context.make_current()
-                        pink_world.render_scene()
+                        GL.glClearColor(1, 0.7, 0.7, 1)  # pink
+                        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
 
 
 if __name__ == "__main__":
