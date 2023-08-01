@@ -3,13 +3,153 @@ Prototype for future high level api constructs in pyopenxr.
 """
 
 import ctypes
+import inspect
 import sys
 import time
 from typing import Generator
 
 from OpenGL import GL
+from OpenGL.GL.shaders import compileShader, compileProgram
 
 import xr.api2
+
+
+class RenderContext(object):
+    """
+    Contains enough information for renderers to display,
+    including projection matrix and view matrix.
+    """
+    def __init__(self, view: xr.View, near_z=0.05):
+        # TODO: cache projection matrix for performance
+        self.projection_matrix = xr.Matrix4x4f.create_projection_fov(
+            graphics_api=xr.GraphicsAPI.OPENGL,
+            fov=view.fov,
+            near_z=near_z,
+            far_z=-1,  # tip: use negative far_z for infinity projection...
+        ).as_numpy()
+        to_view = xr.Matrix4x4f.create_translation_rotation_scale(
+            translation=view.pose.position,
+            rotation=view.pose.orientation,
+            scale=(1, 1, 1),
+        )
+        self.view_matrix = xr.Matrix4x4f.invert_rigid_body(to_view).as_numpy()
+
+
+class CubeRenderer(object):
+    def __init__(self):
+        self.vao = None
+        self.shader = None
+
+    def __enter__(self):
+        self.init_gl()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.destroy_gl()
+
+    def init_gl(self):
+        vertex_shader = compileShader(
+            inspect.cleandoc("""
+            #version 430
+            #line 55
+
+            // Adapted from @jherico's RiftDemo.py in pyovr
+
+            /*  Draws a cube:
+
+               2________ 3
+               /|      /|
+             6/_|____7/ |
+              | |_____|_| 
+              | /0    | /1
+              |/______|/
+              4       5          
+
+             */
+
+            layout(location = 0) uniform mat4 Projection = mat4(1);
+            layout(location = 4) uniform mat4 View = mat4(1);
+            const float s = 0.2;  // default cube scale 20 cm
+            layout(location = 8) uniform mat4 Model = mat4(
+                s, 0, 0, 0,
+                0, s, 0, 0,
+                0, 0, s, 0,
+                0, s, 0, 1);  // raise cube to sit on floor
+
+            const float r = 0.5;  // "radius" is 0.5, so cube edge length is 1.0
+            const vec3 UNIT_CUBE[8] = vec3[8](
+              vec3(-r, -r, -r), // 0: lower left rear
+              vec3(+r, -r, -r), // 1: lower right rear
+              vec3(-r, +r, -r), // 2: upper left rear
+              vec3(+r, +r, -r), // 3: upper right rear
+              vec3(-r, -r, +r), // 4: lower left front
+              vec3(+r, -r, +r), // 5: lower right front
+              vec3(-r, +r, +r), // 6: upper left front
+              vec3(+r, +r, +r)  // 7: upper right front
+            );
+
+            const vec3 UNIT_CUBE_NORMALS[6] = vec3[6](
+              vec3(0.0, 0.0, -1.0),
+              vec3(0.0, 0.0, 1.0),
+              vec3(1.0, 0.0, 0.0),
+              vec3(-1.0, 0.0, 0.0),
+              vec3(0.0, 1.0, 0.0),
+              vec3(0.0, -1.0, 0.0)
+            );
+
+            const int CUBE_INDICES[36] = int[36](
+              0, 1, 2, 2, 1, 3, // rear
+              4, 6, 5, 6, 7, 5, // front
+              0, 2, 4, 4, 2, 6, // left
+              1, 3, 5, 5, 3, 7, // right
+              2, 6, 3, 6, 3, 7, // top
+              0, 1, 4, 4, 1, 5  // bottom
+            );
+
+            out vec3 _color;
+
+            void main() {
+              _color = vec3(1.0, 0.0, 0.0);
+              int vertexIndex = CUBE_INDICES[gl_VertexID];
+              int normalIndex = gl_VertexID / 6;
+
+              _color = UNIT_CUBE_NORMALS[normalIndex];
+              if (any(lessThan(_color, vec3(0.0)))) {
+                  _color = vec3(1.0) + _color;
+              }
+
+              gl_Position = Projection * View * Model * vec4(UNIT_CUBE[vertexIndex], 1.0);
+            }
+            """), GL.GL_VERTEX_SHADER)
+        fragment_shader = compileShader(
+            inspect.cleandoc("""
+            #version 430
+
+            in vec3 _color;
+            out vec4 FragColor;
+
+            void main() {
+              FragColor = vec4(_color, 1.0);
+            }
+            """), GL.GL_FRAGMENT_SHADER)
+        self.shader = compileProgram(vertex_shader, fragment_shader)
+        self.vao = GL.glGenVertexArrays(1)
+        GL.glEnable(GL.GL_DEPTH_TEST)
+
+    def paint_gl(self, render_context: RenderContext):
+        GL.glUseProgram(self.shader)
+        GL.glUniformMatrix4fv(0, 1, False, render_context.projection_matrix)
+        GL.glUniformMatrix4fv(4, 1, False, render_context.view_matrix)
+        GL.glBindVertexArray(self.vao)
+        GL.glDrawArrays(GL.GL_TRIANGLES, 0, 36)
+
+    def destroy_gl(self):
+        if self.shader is not None:
+            GL.glDeleteProgram(self.shader)
+            self.shader = None
+        if self.vao is not None:
+            GL.glDeleteVertexArrays([self.vao])
+            self.vao = None
 
 
 class FrameManager(object):
@@ -269,6 +409,7 @@ class XrContext(object):
             ).__enter__()
             return self
         except BaseException:
+            # Clean up partially constructed context manager chain
             self.__exit__(*sys.exc_info())
             raise
 
@@ -280,7 +421,7 @@ class XrContext(object):
         if self.swapchains is not None:
             self.swapchains.__exit__(exc_type, exc_val, exc_tb)
             self.swapchains = None
-        if self.reference_space is None:
+        if self.reference_space is not None:
             xr.destroy_space(space=self.reference_space)
             self.reference_space = None
         if self.session is not None:
@@ -298,7 +439,7 @@ class XrContext(object):
         """
         The OpenXR frame loop.
         """
-        if self.session_manager is None:
+        if self.instance is None:  # Called in non-context manager context
             with self:
                 for frame in self.session_manager.frames():
                     yield frame
@@ -315,6 +456,9 @@ def main():
         ]),
     ) as context:
         instance, session = context.instance, context.session
+        cube = CubeRenderer()
+        context.graphics_context.make_current()
+        cube.init_gl()
         with xr.api2.TwoControllers(
             instance=instance,
             session=session,
@@ -327,7 +471,7 @@ def main():
                 ),
             )
             for frame_index, frame in enumerate(context.frames()):
-                if frame_index > 500:
+                if frame_index > 3000:
                     break
                 if frame.session_state == xr.SessionState.FOCUSED:
                     # Get controller poses
@@ -340,9 +484,13 @@ def main():
                     if found_count == 0:
                         print("no controllers active")
                 if frame.frame_state.should_render:
-                    for _view in frame.views():
+                    for view in frame.views():
+                        context.graphics_context.make_current()
                         GL.glClearColor(1, 0.7, 0.7, 1)  # pink
-                        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+                        GL.glClearDepth(1.0)
+                        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+                        render_context = RenderContext(view)
+                        cube.paint_gl(render_context)
 
 
 if __name__ == "__main__":
