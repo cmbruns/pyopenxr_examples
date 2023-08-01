@@ -8,6 +8,7 @@ import sys
 import time
 from typing import Generator
 
+import numpy
 from OpenGL import GL
 from OpenGL.GL.shaders import compileShader, compileProgram
 
@@ -36,9 +37,11 @@ class RenderContext(object):
 
 
 class CubeRenderer(object):
-    def __init__(self):
+    def __init__(self, model_matrix=None):
         self.vao = None
         self.shader = None
+        self._model_matrix = numpy.array(model_matrix, dtype=numpy.float32).flatten()
+        self.do_show = True
 
     def __enter__(self):
         self.init_gl()
@@ -47,7 +50,19 @@ class CubeRenderer(object):
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.destroy_gl()
 
+    @property
+    def model_matrix(self):
+        return self._model_matrix
+
+    @model_matrix.setter
+    def model_matrix(self, value):
+        m = numpy.array(value, dtype=numpy.float32).flatten()
+        assert len(m) == 16
+        self._model_matrix = m
+
     def init_gl(self):
+        if self.vao is not None:
+            return
         vertex_shader = compileShader(
             inspect.cleandoc("""
             #version 430
@@ -137,9 +152,13 @@ class CubeRenderer(object):
         GL.glEnable(GL.GL_DEPTH_TEST)
 
     def paint_gl(self, render_context: RenderContext):
+        if not self.do_show:
+            return
         GL.glUseProgram(self.shader)
         GL.glUniformMatrix4fv(0, 1, False, render_context.projection_matrix)
         GL.glUniformMatrix4fv(4, 1, False, render_context.view_matrix)
+        if self._model_matrix is not None:
+            GL.glUniformMatrix4fv(8, 1, False, self._model_matrix)
         GL.glBindVertexArray(self.vao)
         GL.glDrawArrays(GL.GL_TRIANGLES, 0, 36)
 
@@ -148,7 +167,7 @@ class CubeRenderer(object):
             GL.glDeleteProgram(self.shader)
             self.shader = None
         if self.vao is not None:
-            GL.glDeleteVertexArrays([self.vao])
+            GL.glDeleteVertexArrays(1, (self.vao,))
             self.vao = None
 
 
@@ -456,9 +475,18 @@ def main():
         ]),
     ) as context:
         instance, session = context.instance, context.session
-        cube = CubeRenderer()
+        s = 0.5  # Length of cube edge = 50 cm
+        floor_cube = CubeRenderer(model_matrix=[
+            s, 0, 0, 0,
+            0, s, 0, 0,
+            0, 0, s, 0,
+            0, s, 0, 1,  # set cube flat on floor
+        ])
+        controller_cubes = [CubeRenderer(), CubeRenderer()]
         context.graphics_context.make_current()
-        cube.init_gl()
+        floor_cube.init_gl()
+        for c in controller_cubes:
+            c.init_gl()
         with xr.api2.TwoControllers(
             instance=instance,
             session=session,
@@ -471,8 +499,10 @@ def main():
                 ),
             )
             for frame_index, frame in enumerate(context.frames()):
-                if frame_index > 3000:
+                if frame_index > 5000:
                     break
+                for c in controller_cubes:
+                    c.do_show = False
                 if frame.session_state == xr.SessionState.FOCUSED:
                     # Get controller poses
                     found_count = 0
@@ -481,6 +511,14 @@ def main():
                         if space_location.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
                             print(f"Controller {index + 1}: {space_location.pose}")
                             found_count += 1
+                            if index < 2:
+                                controller_cubes[index].do_show = True
+                                tx = xr.Matrix4x4f.create_translation_rotation_scale(
+                                    translation=space_location.pose.position,
+                                    rotation=space_location.pose.orientation,
+                                    scale=[0.1],
+                                )
+                                controller_cubes[index].model_matrix = tx.as_numpy()
                     if found_count == 0:
                         print("no controllers active")
                 if frame.frame_state.should_render:
@@ -490,7 +528,14 @@ def main():
                         GL.glClearDepth(1.0)
                         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
                         render_context = RenderContext(view)
-                        cube.paint_gl(render_context)
+                        floor_cube.paint_gl(render_context)
+                        for c in controller_cubes:
+                            if c.do_show:
+                                c.paint_gl(render_context)
+            context.graphics_context.make_current()
+            floor_cube.destroy_gl()
+            for c in controller_cubes:
+                c.destroy_gl()
 
 
 if __name__ == "__main__":
