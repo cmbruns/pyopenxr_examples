@@ -16,13 +16,13 @@ def main():
     ) as context:
         instance, session = context.instance, context.session
         s = 0.5  # Length of cube edge = 50 cm
-        floor_cube = xr.api2.CubeRenderer(model_matrix=[
+        floor_cube = xr.api2.ColorCubeRenderer(model_matrix=[
             s, 0, 0, 0,
             0, s, 0, 0,
             0, 0, s, 0,
             0, 0.5 * s, 0, 1,  # set cube flat on floor
         ])
-        controller_cubes = [xr.api2.CubeRenderer(), xr.api2.CubeRenderer()]
+        controller_cubes = [xr.api2.ColorCubeRenderer(), xr.api2.ColorCubeRenderer()]
         context.graphics_context.make_current()
         floor_cube.init_gl()
         for c in controller_cubes:

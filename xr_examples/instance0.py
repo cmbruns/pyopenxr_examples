@@ -1,7 +1,7 @@
 """
 Level 0 API construction of instance.
 
-Using the lowest level less-pythonic ctypes API.
+Using the lowest level raw_functions ctypes API
 """
 
 import ctypes
