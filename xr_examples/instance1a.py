@@ -1,4 +1,5 @@
 """
+example instance1a.py
 Level 1 API construction of instance.
 
 A more pythonic version of the OpenXR API
@@ -14,4 +15,7 @@ instance = xr.create_instance(
     )
 )
 
-xr.destroy_instance(instance)  # need to manually clean up allocated resources
+# Because we called "create_instance()", we should manually clean up.
+# (see instance1b.py for the context manager approach)
+xr.destroy_instance(instance)
+

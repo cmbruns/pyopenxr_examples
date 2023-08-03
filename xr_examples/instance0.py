@@ -8,7 +8,7 @@ import ctypes
 import xr
 import xr.raw_functions as xrr
 
-instance = xr.Instance(None)  # create an uninitialized Instance
+instance = xr.Instance()  # create an uninitialized Instance
 # directly call the raw ctypes xrCreateInstance function
 result = xrr.xrCreateInstance(
     xr.InstanceCreateInfo(
