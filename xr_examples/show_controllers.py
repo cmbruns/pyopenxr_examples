@@ -1,9 +1,6 @@
 """
-Prototype for future high level api constructs in pyopenxr.
+Show handheld motion controllers as cubes.
 """
-
-import sys
-from typing import Generator
 
 from OpenGL import GL
 
