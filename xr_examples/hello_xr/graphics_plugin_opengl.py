@@ -69,7 +69,7 @@ class OpenGLGraphicsPlugin(IGraphicsPlugin):
         self.swapchain_framebuffer: Optional[int] = None
         self.program = None
         self.model_view_projection_uniform_location = 0
-        self.vertex_attrib_coords = 0
+        self.vertex_attrib_coordinates = 0
         self.vertex_attrib_color = 0
         self.vao = None
         self.cube_vertex_buffer = None
@@ -237,7 +237,7 @@ class OpenGLGraphicsPlugin(IGraphicsPlugin):
         GL.glDeleteShader(vertex_shader)
         GL.glDeleteShader(fragment_shader)
         self.model_view_projection_uniform_location = GL.glGetUniformLocation(self.program, "ModelViewProjection")
-        self.vertex_attrib_coords = GL.glGetAttribLocation(self.program, "VertexPos")
+        self.vertex_attrib_coordinates = GL.glGetAttribLocation(self.program, "VertexPos")
         self.vertex_attrib_color = GL.glGetAttribLocation(self.program, "VertexColor")
         self.cube_vertex_buffer = GL.glGenBuffers(1)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.cube_vertex_buffer)
@@ -247,11 +247,11 @@ class OpenGLGraphicsPlugin(IGraphicsPlugin):
         GL.glBufferData(GL.GL_ELEMENT_ARRAY_BUFFER, c_cubeIndices, GL.GL_STATIC_DRAW)
         self.vao = GL.glGenVertexArrays(1)
         GL.glBindVertexArray(self.vao)
-        GL.glEnableVertexAttribArray(self.vertex_attrib_coords)
+        GL.glEnableVertexAttribArray(self.vertex_attrib_coordinates)
         GL.glEnableVertexAttribArray(self.vertex_attrib_color)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, self.cube_vertex_buffer)
         GL.glBindBuffer(GL.GL_ELEMENT_ARRAY_BUFFER, self.cube_index_buffer)
-        GL.glVertexAttribPointer(self.vertex_attrib_coords, 3, GL.GL_FLOAT, False,
+        GL.glVertexAttribPointer(self.vertex_attrib_coordinates, 3, GL.GL_FLOAT, False,
                                  sizeof(Vertex), cast(0, c_void_p))
         GL.glVertexAttribPointer(self.vertex_attrib_color, 3, GL.GL_FLOAT, False,
                                  sizeof(Vertex),
