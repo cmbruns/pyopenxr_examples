@@ -2,10 +2,8 @@
 
 """
 
-import argparse
 import ctypes
 from ctypes import (
-    addressof,
     byref,
     c_float,
     c_int32,
@@ -69,7 +67,7 @@ class Swapchain(Structure):
 
 
 class OpenXRProgram(object):
-    def __init__(self, options: argparse.Namespace, platform_plugin: IPlatformPlugin, graphics_plugin: IGraphicsPlugin):
+    def __init__(self, options: Options, platform_plugin: IPlatformPlugin, graphics_plugin: IGraphicsPlugin):
         self.options = options
         self.platform_plugin = platform_plugin
         self.graphics_plugin = graphics_plugin
@@ -108,9 +106,9 @@ class OpenXRProgram(object):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self.input.action_set is not None:
+        if self.input.action_set:
             for hand in Side:
-                if self.input.hand_space[hand] is not None:
+                if self.input.hand_space[hand]:
                     xr.destroy_space(self.input.hand_space[hand])
                     self.input.hand_space[hand] = None
             xr.destroy_action_set(self.input.action_set)
@@ -145,16 +143,16 @@ class OpenXRProgram(object):
         extensions = []
         # Enable debug messaging
         discovered_extensions = xr.enumerate_instance_extension_properties()
-        dumci = xr.DebugUtilsMessengerCreateInfoEXT()
+        debug_utils_messenger_create_info = xr.DebugUtilsMessengerCreateInfoEXT()
         next_structure = self.platform_plugin.instance_create_extension
-        ALL_SEVERITIES = (
+        all_severities = (
                 xr.DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT
                 | xr.DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT
                 | xr.DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
                 | xr.DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
         )
 
-        ALL_TYPES = (
+        all_types = (
                 xr.DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT
                 | xr.DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT
                 | xr.DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT
@@ -162,14 +160,14 @@ class OpenXRProgram(object):
         )
         if xr.EXT_DEBUG_UTILS_EXTENSION_NAME in discovered_extensions:
             extensions.append(xr.EXT_DEBUG_UTILS_EXTENSION_NAME)
-            dumci.message_severities = ALL_SEVERITIES
-            dumci.message_types = ALL_TYPES
-            dumci.user_data = None
-            dumci.user_callback = self.debug_callback
+            debug_utils_messenger_create_info.message_severities = all_severities
+            debug_utils_messenger_create_info.message_types = all_types
+            debug_utils_messenger_create_info.user_data = None
+            debug_utils_messenger_create_info.user_callback = self.debug_callback
             if next_structure is None:
-                next_structure = cast(pointer(dumci), c_void_p)
+                next_structure = cast(pointer(debug_utils_messenger_create_info), c_void_p)
             else:
-                next_structure.next = cast(pointer(dumci), c_void_p)
+                next_structure.next = cast(pointer(debug_utils_messenger_create_info), c_void_p)
         #
         extensions.extend(self.platform_plugin.instance_extensions)
         extensions.extend(self.graphics_plugin.instance_extensions)
@@ -856,7 +854,7 @@ class OpenXRProgram(object):
         return True
 
     def try_read_next_event(self) -> Optional[Structure]:
-        #  It is sufficient to clear the just the XrEventDataBuffer header to
+        #  It is sufficient to clear just the XrEventDataBuffer header to
         #  XR_TYPE_EVENT_DATA_BUFFER
         base_header = self.event_data_buffer
         base_header.type = xr.StructureType.EVENT_DATA_BUFFER
@@ -941,7 +939,7 @@ def openxr_log_level(severity_flags: int) -> int:
 
 
 def xr_debug_callback(
-            severity: xr.DebugUtilsMessageSeverityFlagsEXT,
+            severity: int,
             _type: xr.DebugUtilsMessageTypeFlagsEXT,
             data: POINTER(xr.DebugUtilsMessengerCallbackDataEXT),
             _user_data: c_void_p) -> bool:
