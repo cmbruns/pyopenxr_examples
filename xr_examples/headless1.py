@@ -1,6 +1,6 @@
 """
 pyopenxr headless example
-using level 2 OpenXR API
+using level 1 OpenXR API
 """
 
 import ctypes

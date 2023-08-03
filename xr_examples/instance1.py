@@ -1,5 +1,5 @@
 """
-Level 2 API construction of instance.
+Level 1 API construction of instance.
 
 A more pythonic version of the OpenXR API
 """
