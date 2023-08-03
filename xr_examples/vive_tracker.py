@@ -11,12 +11,12 @@ The udev symbolic link trick was crucial in my case.
 import ctypes
 from ctypes import cast, byref
 import time
-import xr
+import xr.api2
 
 print("Warning: trackers with role 'Handheld object' won't be detected.")
 
 # ContextObject is a high level pythonic class meant to keep simple cases simple.
-with xr.ContextObject(
+with xr.api2.XrContext(
     instance_create_info=xr.InstanceCreateInfo(
         enabled_extension_names=[
             # A graphics extension is mandatory (without a headless extension)
@@ -27,7 +27,6 @@ with xr.ContextObject(
 ) as context:
     instance = context.instance
     session = context.session
-
     # Save the function pointer
     enumerateViveTrackerPathsHTCX = cast(
         xr.get_instance_proc_addr(
@@ -36,7 +35,14 @@ with xr.ContextObject(
         ),
         xr.PFN_xrEnumerateViveTrackerPathsHTCX
     )
-
+    tracker_action_set = xr.ActionSet(
+        instance=instance,
+        create_info=xr.ActionSetCreateInfo(
+            action_set_name="tracker_action_set",
+            localized_action_set_name="Tracker action set",
+            priority=0,
+        ),
+    )
     # Create the action with subaction path
     # Role strings from
     # https://www.khronos.org/registry/OpenXR/specs/1.0/html/xrspec.html#XR_HTCX_vive_tracker_interaction
@@ -61,7 +67,7 @@ with xr.ContextObject(
         *[xr.string_to_path(instance, role_string) for role_string in role_path_strings],
     )
     pose_action = xr.create_action(
-        action_set=context.default_action_set,
+        action_set=tracker_action_set,
         create_info=xr.ActionCreateInfo(
             action_type=xr.ActionType.POSE_INPUT,
             action_name="tracker_pose",
@@ -108,22 +114,27 @@ with xr.ContextObject(
     print(xr.Result(result), n_paths.value)
     # print(*vive_tracker_paths)
 
-    # Loop over the render frames
-    for frame_index, frame_state in enumerate(context.frame_loop()):
+    xr.attach_session_action_sets(
+        session=session,
+        attach_info=xr.SessionActionSetsAttachInfo(
+            action_sets=[tracker_action_set],
+        ),
+    )
+    active_action_set = xr.ActiveActionSet(
+        action_set=tracker_action_set,
+        subaction_path=xr.NULL_PATH,
+    )
 
-        if context.session_state == xr.SessionState.FOCUSED:
-            active_action_set = xr.ActiveActionSet(
-                action_set=context.default_action_set,
-                subaction_path=xr.NULL_PATH,
-            )
+    # Loop over the render frames
+    for frame_index, frame in enumerate(context.frames()):
+        frame_state = frame.frame_state
+        if frame.session_state == xr.SessionState.FOCUSED:
             xr.sync_actions(
                 session=session,
                 sync_info=xr.ActionsSyncInfo(
-                    count_active_action_sets=1,
-                    active_action_sets=ctypes.pointer(active_action_set),
+                    active_action_sets=[active_action_set],
                 ),
             )
-
             n_paths = ctypes.c_uint32(0)
             result = enumerateViveTrackerPathsHTCX(instance, 0, byref(n_paths), None)
             if xr.check_result(result).is_exception():
@@ -140,7 +151,7 @@ with xr.ContextObject(
             for index, space in enumerate(tracker_action_spaces):
                 space_location = xr.locate_space(
                     space=space,
-                    base_space=context.space,
+                    base_space=context.reference_space,
                     time=frame_state.predicted_display_time,
                 )
                 if space_location.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
