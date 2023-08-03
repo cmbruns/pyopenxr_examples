@@ -79,7 +79,6 @@ def main():
         with xr.api2.TwoControllers(
             instance=instance,
             session=session,
-            reference_space=context.reference_space,
         ) as two_controllers:
             xr.attach_session_action_sets(
                 session=session,
@@ -96,7 +95,9 @@ def main():
                     # Get controller poses
                     found_count = 0
                     for index, space_location in two_controllers.enumerate_active_controllers(
-                            frame.frame_state.predicted_display_time):
+                        time=frame.frame_state.predicted_display_time,
+                        reference_space=context.reference_space,
+                    ):
                         if space_location.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
                             print(f"Controller {index + 1}: {space_location.pose}")
                             found_count += 1
