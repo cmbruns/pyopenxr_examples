@@ -3,172 +3,13 @@ Prototype for future high level api constructs in pyopenxr.
 """
 
 import ctypes
-import inspect
 import sys
 import time
 from typing import Generator
 
-import numpy
 from OpenGL import GL
-from OpenGL.GL.shaders import compileShader, compileProgram
 
 import xr.api2
-
-
-class RenderContext(object):
-    """
-    Contains enough information for renderers to display,
-    including projection matrix and view matrix.
-    """
-    def __init__(self, view: xr.View, near_z=0.05):
-        # TODO: cache projection matrix for performance
-        self.projection_matrix = xr.Matrix4x4f.create_projection_fov(
-            graphics_api=xr.GraphicsAPI.OPENGL,
-            fov=view.fov,
-            near_z=near_z,
-            far_z=-1,  # tip: use negative far_z for infinity projection...
-        ).as_numpy()
-        to_view = xr.Matrix4x4f.create_translation_rotation_scale(
-            translation=view.pose.position,
-            rotation=view.pose.orientation,
-            scale=(1, 1, 1),
-        )
-        self.view_matrix = xr.Matrix4x4f.invert_rigid_body(to_view).as_numpy()
-
-
-class CubeRenderer(object):
-    def __init__(self, model_matrix=None):
-        self.vao = None
-        self.shader = None
-        self._model_matrix = numpy.array(model_matrix, dtype=numpy.float32).flatten()
-        self.do_show = True
-
-    def __enter__(self):
-        self.init_gl()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.destroy_gl()
-
-    @property
-    def model_matrix(self):
-        return self._model_matrix
-
-    @model_matrix.setter
-    def model_matrix(self, value):
-        m = numpy.array(value, dtype=numpy.float32).flatten()
-        assert len(m) == 16
-        self._model_matrix = m
-
-    def init_gl(self):
-        if self.vao is not None:
-            return
-        vertex_shader = compileShader(
-            inspect.cleandoc("""
-            #version 430
-            #line 55
-
-            // Adapted from @jherico's RiftDemo.py in pyovr
-
-            /*  Draws a cube:
-
-               2________ 3
-               /|      /|
-             6/_|____7/ |
-              | |_____|_| 
-              | /0    | /1
-              |/______|/
-              4       5          
-
-             */
-
-            layout(location = 0) uniform mat4 Projection = mat4(1);
-            layout(location = 4) uniform mat4 View = mat4(1);
-            const float s = 0.2;  // default cube scale 20 cm
-            layout(location = 8) uniform mat4 Model = mat4(
-                s, 0, 0, 0,
-                0, s, 0, 0,
-                0, 0, s, 0,
-                0, s, 0, 1);  // raise cube to sit on floor
-
-            const float r = 0.5;  // "radius" is 0.5, so cube edge length is 1.0
-            const vec3 UNIT_CUBE[8] = vec3[8](
-              vec3(-r, -r, -r), // 0: lower left rear
-              vec3(+r, -r, -r), // 1: lower right rear
-              vec3(-r, +r, -r), // 2: upper left rear
-              vec3(+r, +r, -r), // 3: upper right rear
-              vec3(-r, -r, +r), // 4: lower left front
-              vec3(+r, -r, +r), // 5: lower right front
-              vec3(-r, +r, +r), // 6: upper left front
-              vec3(+r, +r, +r)  // 7: upper right front
-            );
-
-            const vec3 UNIT_CUBE_NORMALS[6] = vec3[6](
-              vec3(0.0, 0.0, -1.0),
-              vec3(0.0, 0.0, 1.0),
-              vec3(1.0, 0.0, 0.0),
-              vec3(-1.0, 0.0, 0.0),
-              vec3(0.0, 1.0, 0.0),
-              vec3(0.0, -1.0, 0.0)
-            );
-
-            const int CUBE_INDICES[36] = int[36](
-              0, 1, 2, 2, 1, 3, // rear
-              4, 6, 5, 6, 7, 5, // front
-              0, 2, 4, 4, 2, 6, // left
-              1, 3, 5, 5, 3, 7, // right
-              2, 6, 3, 6, 3, 7, // top
-              0, 1, 4, 4, 1, 5  // bottom
-            );
-
-            out vec3 _color;
-
-            void main() {
-              _color = vec3(1.0, 0.0, 0.0);
-              int vertexIndex = CUBE_INDICES[gl_VertexID];
-              int normalIndex = gl_VertexID / 6;
-
-              _color = UNIT_CUBE_NORMALS[normalIndex];
-              if (any(lessThan(_color, vec3(0.0)))) {
-                  _color = vec3(1.0) + _color;
-              }
-
-              gl_Position = Projection * View * Model * vec4(UNIT_CUBE[vertexIndex], 1.0);
-            }
-            """), GL.GL_VERTEX_SHADER)
-        fragment_shader = compileShader(
-            inspect.cleandoc("""
-            #version 430
-
-            in vec3 _color;
-            out vec4 FragColor;
-
-            void main() {
-              FragColor = vec4(_color, 1.0);
-            }
-            """), GL.GL_FRAGMENT_SHADER)
-        self.shader = compileProgram(vertex_shader, fragment_shader)
-        self.vao = GL.glGenVertexArrays(1)
-        GL.glEnable(GL.GL_DEPTH_TEST)
-
-    def paint_gl(self, render_context: RenderContext):
-        if not self.do_show:
-            return
-        GL.glUseProgram(self.shader)
-        GL.glUniformMatrix4fv(0, 1, False, render_context.projection_matrix)
-        GL.glUniformMatrix4fv(4, 1, False, render_context.view_matrix)
-        if self._model_matrix is not None:
-            GL.glUniformMatrix4fv(8, 1, False, self._model_matrix)
-        GL.glBindVertexArray(self.vao)
-        GL.glDrawArrays(GL.GL_TRIANGLES, 0, 36)
-
-    def destroy_gl(self):
-        if self.shader is not None:
-            GL.glDeleteProgram(self.shader)
-            self.shader = None
-        if self.vao is not None:
-            GL.glDeleteVertexArrays(1, (self.vao,))
-            self.vao = None
 
 
 class FrameManager(object):
@@ -476,17 +317,63 @@ def main():
     ) as context:
         instance, session = context.instance, context.session
         s = 0.5  # Length of cube edge = 50 cm
-        floor_cube = CubeRenderer(model_matrix=[
+        floor_cube = xr.api2.CubeRenderer(model_matrix=[
             s, 0, 0, 0,
             0, s, 0, 0,
             0, 0, s, 0,
-            0, s, 0, 1,  # set cube flat on floor
+            0, 0.5 * s, 0, 1,  # set cube flat on floor
         ])
-        controller_cubes = [CubeRenderer(), CubeRenderer()]
+        controller_cubes = [xr.api2.CubeRenderer(), xr.api2.CubeRenderer()]
         context.graphics_context.make_current()
         floor_cube.init_gl()
         for c in controller_cubes:
             c.init_gl()
+        #
+        test_action_set = xr.ActionSet(instance, xr.ActionSetCreateInfo(
+            action_set_name="vibrate_action_set",
+            localized_action_set_name="Vibrate Action Set",
+            priority=0,
+        ))
+        subaction_paths = [
+            xr.string_to_path(instance, "/user/hand/left"),
+            xr.string_to_path(instance, "/user/hand/right"),
+        ]
+        grab_action = xr.Action(test_action_set, xr.ActionCreateInfo(
+            action_name="grab_object",
+            localized_action_name="Grab object",
+            action_type=xr.ActionType.FLOAT_INPUT,
+            subaction_paths=subaction_paths,
+        ))
+        vibrate_action = xr.Action(test_action_set, xr.ActionCreateInfo(
+            action_name="vibrate_hand",
+            localized_action_name="Vibrate hand",
+            action_type=xr.ActionType.VIBRATION_OUTPUT,
+            subaction_paths=subaction_paths,
+        ))
+        trigger_value_path = [
+            xr.string_to_path(instance, "/user/hand/left/input/trigger/value"),
+            xr.string_to_path(instance, "/user/hand/right/input/trigger/value")]
+        haptic_path = [
+            xr.string_to_path(instance, "/user/hand/left/output/haptic"),
+            xr.string_to_path(instance, "/user/hand/right/output/haptic")]
+        vive_bindings = [
+            xr.ActionSuggestedBinding(grab_action, trigger_value_path[0]),
+            xr.ActionSuggestedBinding(grab_action, trigger_value_path[1]),
+            xr.ActionSuggestedBinding(vibrate_action, haptic_path[0]),
+            xr.ActionSuggestedBinding(vibrate_action, haptic_path[1]),
+        ]
+        xr.suggest_interaction_profile_bindings(
+            instance=instance,
+            suggested_bindings=xr.InteractionProfileSuggestedBinding(
+                interaction_profile=xr.string_to_path(
+                    instance,
+                    "/interaction_profiles/htc/vive_controller",
+                ),
+                count_suggested_bindings=len(vive_bindings),
+                suggested_bindings=(xr.ActionSuggestedBinding * len(vive_bindings))(*vive_bindings),
+            ),
+        )
+        #
         with xr.api2.TwoControllers(
             instance=instance,
             session=session,
@@ -495,7 +382,7 @@ def main():
             xr.attach_session_action_sets(
                 session=session,
                 attach_info=xr.SessionActionSetsAttachInfo(
-                    action_sets=[two_controllers.action_set],
+                    action_sets=[two_controllers.action_set, test_action_set],
                 ),
             )
             for frame_index, frame in enumerate(context.frames()):
@@ -527,7 +414,7 @@ def main():
                         GL.glClearColor(1, 0.7, 0.7, 1)  # pink
                         GL.glClearDepth(1.0)
                         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-                        render_context = RenderContext(view)
+                        render_context = xr.api2.RenderContext(view)
                         floor_cube.paint_gl(render_context)
                         for c in controller_cubes:
                             if c.do_show:
