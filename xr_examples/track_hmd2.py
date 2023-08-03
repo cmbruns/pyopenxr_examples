@@ -34,17 +34,15 @@ with xr.Instance(
                 system_id=system_id,
                 next=graphics.graphics_binding_pointer,
             )
-        ) as session:
-    # Set up event handling to track session state
-    event_bus = xr.api2.EventBus()
-    xr_event_generator = xr.api2.XrEventGenerator(instance)
-    session_status = xr.api2.SessionStatus(
-        session=session,
-        event_source=event_bus,
-        begin_info=xr.SessionBeginInfo(
-            primary_view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
-        ),
-    )
+        ) as session, \
+        xr.api2.SessionManager(
+            system_id=system_id,
+            instance=instance,
+            session=session,
+            begin_info=xr.SessionBeginInfo(
+                primary_view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
+            ),
+        ) as session_manager:
     reference_space = xr.create_reference_space(
         session=session,
         create_info=xr.ReferenceSpaceCreateInfo(
@@ -53,33 +51,21 @@ with xr.Instance(
         ),
     )
     # Loop over the session frames
-    for frame_index in range(20):  # Limit to 20 total frames for demo purposes
-        xr_event_generator.poll_events(destination=event_bus)
-        if session_status.state in [
+    for frame_index, frame in enumerate(session_manager.frames()):
+        if frame_index > 20:
+            break  # Limit to 20 total frames for demo purposes
+        if frame.session_state in [
             xr.SessionState.READY,
-            xr.SessionState.SYNCHRONIZED,
-            xr.SessionState.VISIBLE,
             xr.SessionState.FOCUSED,
         ]:
-            frame_state = xr.wait_frame(session)
-            xr.begin_frame(session)
-
             view_state, views = xr.locate_views(
                 session=session,
                 view_locate_info=xr.ViewLocateInfo(
                     view_configuration_type=xr.ViewConfigurationType.PRIMARY_STEREO,
-                    display_time=frame_state.predicted_display_time,
+                    display_time=frame.frame_state.predicted_display_time,
                     space=reference_space,
                 )
             )
-            print(views[xr.Eye.LEFT].pose)
+            print(views[0].pose)  # Left eye view
             # Sleep periodically to avoid consuming all available system resources
             time.sleep(0.500)
-            xr.end_frame(
-                session=session,
-                frame_end_info=xr.FrameEndInfo(
-                    display_time=frame_state.predicted_display_time,
-                    environment_blend_mode=xr.EnvironmentBlendMode.OPAQUE,
-                    layers=None,
-                )
-            )
