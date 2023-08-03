@@ -27,7 +27,7 @@ ALL_TYPES = (
 )
 
 
-def py_log_level(severity_flags: int):
+def py_log_level(severity_flags: xr.DebugUtilsMessageSeverityFlagsEXT) -> int:
     if severity_flags & 0x0001:  # VERBOSE
         return logging.DEBUG
     if severity_flags & 0x0010:  # INFO
@@ -191,13 +191,13 @@ class OpenXrExample(object):
             application_info=app_info,
             enabled_extension_names=requested_extensions,
         )
-        dumci = xr.DebugUtilsMessengerCreateInfoEXT()
+        debug_utiles_messenger_create_info = xr.DebugUtilsMessengerCreateInfoEXT()
         if self.enable_debug:
-            dumci.message_severities = ALL_SEVERITIES
-            dumci.message_types = ALL_TYPES
-            dumci.user_data = None  # TODO
-            dumci.user_callback = self.debug_callback
-            ici.next = ctypes.cast(ctypes.pointer(dumci), ctypes.c_void_p)  # TODO: yuck
+            debug_utiles_messenger_create_info.message_severities = ALL_SEVERITIES
+            debug_utiles_messenger_create_info.message_types = ALL_TYPES
+            debug_utiles_messenger_create_info.user_data = None  # TODO
+            debug_utiles_messenger_create_info.user_callback = self.debug_callback
+            ici.next = ctypes.cast(ctypes.pointer(debug_utiles_messenger_create_info), ctypes.c_void_p)  # TODO: yuck
         self.instance = xr.create_instance(ici)
         # TODO: pythonic wrapper
         self.pxrGetOpenGLGraphicsRequirementsKHR = ctypes.cast(
@@ -247,7 +247,7 @@ class OpenXrExample(object):
         if self.window is None:
             raise RuntimeError("Failed to create GLFW window")
         glfw.make_context_current(self.window)
-        # Attempt to disable vsync on the desktop window or
+        # Attempt to disable vsync on the desktop window, or
         # it will interfere with the OpenXR frame loop timing
         glfw.swap_interval(0)
 
@@ -260,17 +260,16 @@ class OpenXrExample(object):
             self.graphics_binding.glx_context = GLX.glXGetCurrentContext()
             self.graphics_binding.glx_drawable = GLX.glXGetCurrentDrawable()
         pp = ctypes.cast(ctypes.pointer(self.graphics_binding), ctypes.c_void_p)
-        sci = xr.SessionCreateInfo(0, self.system_id, next=pp)
+        sci = xr.SessionCreateInfo(xr.SessionCreateFlags.NONE, self.system_id, next=pp)
         self.session = xr.create_session(self.instance, sci)
         reference_spaces = xr.enumerate_reference_spaces(self.session)
         for rs in reference_spaces:
             self.logger.debug(f"Session supports reference space {xr.ReferenceSpaceType(rs)}")
-        # TODO: default constructors for Quaternion, Vector3f, Posef, ReferenceSpaceCreateInfo
-        rsci = xr.ReferenceSpaceCreateInfo(
+        reference_space_create_info = xr.ReferenceSpaceCreateInfo(
             xr.ReferenceSpaceType.STAGE,
             xr.Posef(xr.Quaternionf(0, 0, 0, 1), xr.Vector3f(0, 0, 0))
         )
-        self.projection_layer.space = xr.create_reference_space(self.session, rsci)
+        self.projection_layer.space = xr.create_reference_space(self.session, reference_space_create_info)
         swapchain_formats = xr.enumerate_swapchain_formats(self.session)
         for scf in swapchain_formats:
             self.logger.debug(f"Session supports swapchain format {stringForFormat[scf]}")
@@ -405,11 +404,6 @@ class OpenXrExample(object):
             self.projection_layer.space,
         )
         vs, self.eye_view_states = xr.locate_views(self.session, vi)
-        for eye_index, view_state in enumerate(self.eye_view_states):
-            # These aren't actually used in this simple example...
-            # self.eye_projections[eye_index] = something(view_state.fov)  # TODO:
-            # print(view_state.pose)
-            pass
 
     def render(self):
         ai = xr.SwapchainImageAcquireInfo(None)
