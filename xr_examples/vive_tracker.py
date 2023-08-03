@@ -21,7 +21,7 @@ with xr.ContextObject(
         enabled_extension_names=[
             # A graphics extension is mandatory (without a headless extension)
             xr.KHR_OPENGL_ENABLE_EXTENSION_NAME,
-            xr.extension.HTCX_vive_tracker_interaction.NAME,
+            xr.HTCX_VIVE_TRACKER_INTERACTION_EXTENSION_NAME,
         ],
     ),
 ) as context:
