@@ -4,11 +4,11 @@ This example renders a solid pink field to each eye.
 """
 
 from OpenGL import GL
-import xr
+import xr.api2
 
 
-# ContextObject is a high level pythonic class meant to keep simple cases simple.
-with xr.ContextObject(
+# xrContext is a high level pythonic class meant to keep simple cases simple.
+with xr.api2.XrContext(
     instance_create_info=xr.InstanceCreateInfo(
         enabled_extension_names=[
             # A graphics extension is mandatory (without a headless extension)
@@ -16,8 +16,8 @@ with xr.ContextObject(
         ],
     ),
 ) as context:
-    for frame_index, frame_state in enumerate(context.frame_loop()):
-        for view in context.view_loop(frame_state):
+    for frame_index, frame in enumerate(context.frames()):
+        for view in frame.views():
             GL.glClearColor(1, 0.7, 0.7, 1)  # pink
             GL.glClear(GL.GL_COLOR_BUFFER_BIT)
         if frame_index > 500:  # Don't run forever
