@@ -22,6 +22,7 @@ elif platform.system() == "Linux":
     from OpenGL import GLX
 from OpenGL import GL
 import xr
+import xr.api2
 
 
 run_frame_loop = True
@@ -138,10 +139,9 @@ system_id = xr.get_system(
     ),
 )
 
-graphics = xr.OpenGLGraphics(
+graphics = xr.api2.GLFWContext(
     instance=instance,
-    system=system_id,
-    title="Horatio Hornblower",
+    system_id=system_id,
 )
 
 # OpenGL can report debug messages too
@@ -165,7 +165,7 @@ gl_debug_message_proc = GL.GLDEBUGPROC(gl_debug_message_callback)
 graphics.make_current()
 GL.glDebugMessageCallback(gl_debug_message_proc, None)
 
-graphics_binding_pointer = cast(pointer(graphics.graphics_binding), c_void_p)
+graphics_binding_pointer = graphics.graphics_binding_pointer
 session = xr.create_session(
     instance=instance,
     create_info=xr.SessionCreateInfo(
@@ -174,7 +174,7 @@ session = xr.create_session(
     ),
 )
 
-space = xr.create_reference_space(
+reference_space = xr.create_reference_space(
     session=session,
     create_info=xr.ReferenceSpaceCreateInfo(),
 )
@@ -190,55 +190,18 @@ default_action_set = xr.create_action_set(
 
 # Create swapchains
 view_configuration_type = xr.ViewConfigurationType.PRIMARY_STEREO
-config_views = xr.enumerate_view_configuration_views(
+swapchains = xr.api2.XrSwapchains(
     instance=instance,
     system_id=system_id,
+    session=session,
+    context=graphics,
     view_configuration_type=view_configuration_type,
+    reference_space=reference_space,
 )
-graphics.initialize_resources()
-swapchain_formats = xr.enumerate_swapchain_formats(session)
-color_swapchain_format = graphics.select_color_swapchain_format(swapchain_formats)
-# Create a swapchain for each view.
-swapchains = []
-swapchain_image_buffers = []
-swapchain_image_ptr_buffers = []
-for vp in config_views:
-    # Create the swapchain.
-    swapchain_create_info = xr.SwapchainCreateInfo(
-        array_size=1,
-        format=color_swapchain_format,
-        width=vp.recommended_image_rect_width,
-        height=vp.recommended_image_rect_height,
-        mip_count=1,
-        face_count=1,
-        sample_count=vp.recommended_swapchain_sample_count,
-        usage_flags=xr.SwapchainUsageFlags.SAMPLED_BIT | xr.SwapchainUsageFlags.COLOR_ATTACHMENT_BIT,
-    )
-    swapchain = Swapchain(
-        xr.create_swapchain(
-            session=session,
-            create_info=swapchain_create_info,
-        ),
-        swapchain_create_info.width,
-        swapchain_create_info.height,
-    )
-    swapchains.append(swapchain)
-    swapchain_image_buffer = xr.enumerate_swapchain_images(
-        swapchain=swapchain.handle,
-        element_type=graphics.swapchain_image_type,
-    )
-    # Keep the buffer alive by moving it into the list of buffers.
-    swapchain_image_buffers.append(swapchain_image_buffer)
-    capacity = len(swapchain_image_buffer)
-    swapchain_image_ptr_buffer = (POINTER(xr.SwapchainImageBaseHeader) * capacity)()
-    for ix in range(capacity):
-        swapchain_image_ptr_buffer[ix] = cast(
-            byref(swapchain_image_buffer[ix]),
-            POINTER(xr.SwapchainImageBaseHeader))
-    swapchain_image_ptr_buffers.append(swapchain_image_ptr_buffer)
+
 graphics.make_current()
 # frame_loop
-action_sets = [default_action_set,]
+action_sets = [default_action_set, ]
 xr.attach_session_action_sets(
     session=session,
     attach_info=xr.SessionActionSetsAttachInfo(
@@ -250,13 +213,11 @@ xr.attach_session_action_sets(
 )
 session_is_running = False
 frame_count = 0
+session_state = xr.SessionState.UNKNOWN
 
 if run_frame_loop:
     while True:
         frame_count += 1
-        window_closed = graphics.poll_events()
-        if window_closed:
-            xr.request_exit_session(session)
         # poll_xr_events
         exit_render_loop = False
         while True:
@@ -272,7 +233,7 @@ if run_frame_loop:
                         byref(event_buffer),
                         POINTER(xr.EventDataSessionStateChanged)).contents
                     session_state = xr.SessionState(event.state)
-                    logger.info(f"Session state changed to {str(session_state)}")
+                    logger.info(f"Session state changed to {str(session_state.name)}")
                     if session_state == xr.SessionState.IDLE:
                         pass
                     elif session_state == xr.SessionState.READY:
