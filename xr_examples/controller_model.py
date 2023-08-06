@@ -32,13 +32,14 @@ type_to_dim: Dict[str, int] = {
 class GltfFile(object):
     def __init__(self, file):
         self.gltf = GLTF2().load(file)
-        # Wrap with non-copying reference array
+        # Wrap with numpy so slices will be references not copies
         self.blob = numpy.frombuffer(self.gltf.binary_blob(), dtype=numpy.uint8)
         self.accessors = self.gltf.accessors
-        self.nodes = {}  # TODO: separate node sets for separate instances
+        self.nodes = {}  # TODO: separate node sets for left and right controllers
         self.meshes = []
         for mesh_index, mesh in enumerate(self.gltf.meshes):
             self.meshes.append(GltfMesh(self, mesh_index))
+        self.mesh_nodes = []
         self.scenes = []
         for scene_index, scene in enumerate(self.gltf.scenes):
             self.scenes.append(GltfScene(self, scene_index))
@@ -56,17 +57,44 @@ class GltfScene(object):
 
 
 class GltfNode(object):
-    def __init__(self, gltf_file: GltfFile, node_index: int):
+    def __init__(self, gltf_file: GltfFile, node_index: int, parent_node_stack=[]):
         gltf = gltf_file.gltf
         self.index = node_index
         self.node = gltf.nodes[node_index]
+        print(self.index, self.node)
         self.children = []
+        self.local_matrix = xr.Matrix4x4f.create_scale(1.0)
+        if self.node.translation is not None:
+            self.local_matrix @= xr.Matrix4x4f.create_translation(*self.node.translation)
+        if self.node.rotation is not None:
+            self.local_matrix @= xr.Matrix4x4f.create_from_quaternion(xr.Quaternionf(*self.node.rotation))
+        if self.node.scale is not None:
+            self.local_matrix @= xr.Matrix4x4f.create_scale(*self.node.scale)
+        if self.node.matrix is not None:
+            raise NotImplementedError
+        self.node_stack = parent_node_stack + [self]
+        self.global_matrix = xr.Matrix4x4f.create_scale(1)
+        for node in self.node_stack:
+            self.global_matrix @= node.local_matrix
+        self.global_matrix = self.global_matrix.as_numpy()  # TODO: updatable matrix on node changes
         self.mesh = None
-        if self.node.mesh:
+        if self.node.mesh is not None:
+            print("  Mesh", self.node.mesh)
             mesh_index = self.node.mesh
             self.mesh = gltf_file.meshes[mesh_index]
+            gltf_file.mesh_nodes.append(self)
         for child_index in self.node.children:
-            self.children.append(GltfNode(gltf_file, child_index))
+            self.children.append(GltfNode(gltf_file, child_index, parent_node_stack=self.node_stack))
+
+    def init_gl(self):
+        if self.mesh is None:
+            return
+        self.mesh.init_gl()
+
+    def paint_gl(self, context: xr.api2.RenderContext):
+        if self.mesh is None:
+            return
+        self.mesh.paint_gl(context, self.global_matrix)
 
 
 class GltfBuffer(object):
@@ -185,6 +213,7 @@ class GltfMesh(object):
     def __init__(self, gltf_file: GLTF2, mesh_index) -> None:
         gltf = gltf_file.gltf
         mesh = gltf.meshes[mesh_index]
+        self.mesh = mesh
         self.primitives = []
         for primitive in mesh.primitives:
             self.primitives.append(GltfPrimitive(gltf_file, primitive))
@@ -193,7 +222,7 @@ class GltfMesh(object):
         for primitive in self.primitives:
             primitive.init_gl()
 
-    def paint_gl(self, context):
+    def paint_gl(self, context, node_matrix):
         for primitive in self.primitives:
             primitive.paint_gl(context)
 
@@ -249,12 +278,14 @@ def get_a_mesh_from_gltf(gltf):
 
 
 class ControllerRenderer(object):
-    def __init__(self, vbuf: GltfMesh):
-        self.vbuf = vbuf
+    identity_matrix = xr.Matrix4x4f.create_scale(1).as_numpy()
+
+    def __init__(self, node: GltfNode):
+        self.node = node
         self.shader = None
 
     def init_gl(self):
-        self.vbuf.init_gl()
+        self.node.init_gl()
         vertex_shader = compileShader(
             inspect.cleandoc("""
             #version 430
@@ -287,12 +318,14 @@ class ControllerRenderer(object):
         GL.glUseProgram(self.shader)
         GL.glUniformMatrix4fv(0, 1, False, render_context.projection_matrix)
         GL.glUniformMatrix4fv(4, 1, False, render_context.view_matrix)
-        # TODO model matrix
-        self.vbuf.paint_gl(render_context)
+        if render_context.model_matrix is None:
+            GL.glUniformMatrix4fv(8, 1, False, self.identity_matrix)
+        else:
+            GL.glUniformMatrix4fv(8, 1, False, render_context.model_matrix)
+        self.node.paint_gl(render_context)
 
 
 def show_controller():
-    print(int(GL.GL_TRIANGLES))
     glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
     glb = GLTF2().load(glb_filename)
     mesh = get_a_mesh_from_gltf(glb)
@@ -320,13 +353,36 @@ def show_controller():
                     renderer.paint_gl(render_context)
 
 
+def print_node(gltf, node_index, indent=" "):
+    node = gltf.nodes[node_index]
+    print(indent, node_index, "Node", node.name)
+    if node_index == 2:
+        print(indent, node_index, node)
+    if node.mesh is not None:
+        mesh = gltf.meshes[node.mesh]
+        print(indent + "  ", node.mesh, mesh)
+    for child_index in node.children:
+        print_node(gltf, child_index, indent + "  ")
+
+
+def test2():
+    glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
+    glb = GLTF2().load(glb_filename)
+    for scene in glb.scenes:
+        print(scene)
+        for node_index in scene.nodes:
+            print_node(glb, node_index, "  ")
+
+
 def test():
     glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
     # gltf = GLTF2().load(glb_filename)
     gltf_file = GltfFile(glb_filename)
     renderers = []
-    for mesh in gltf_file.meshes:
-        renderers.append(ControllerRenderer(mesh))
+    print(len(gltf_file.meshes))
+    for node in gltf_file.mesh_nodes:
+        renderers.append(ControllerRenderer(node))
+        print(node.mesh.mesh)
         # break  # OK just one for now
     with xr.api2.XrContext(
             instance_create_info=xr.InstanceCreateInfo(
@@ -336,20 +392,53 @@ def test():
                 ],
             ),
     ) as context:
+        instance, session = context.instance, context.session
         context.graphics_context.make_current()
+        controller_poses = [None, None]
         for renderer in renderers:
             renderer.init_gl()
-        for frame_index, frame in enumerate(context.frames()):
-            if frame.frame_state.should_render:
-                for view in frame.views():
-                    GL.glClearColor(1, 0.7, 0.7, 1)  # pink
-                    GL.glClearDepth(1.0)
-                    GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-                    render_context = xr.api2.RenderContext(view)
-                    for renderer in renderers:
-                        renderer.paint_gl(render_context)
+        with xr.api2.TwoControllers(
+            instance=instance,
+            session=session,
+        ) as two_controllers:
+            xr.attach_session_action_sets(
+                session=session,
+                attach_info=xr.SessionActionSetsAttachInfo(
+                    action_sets=[two_controllers.action_set],
+                ),
+            )
+            for frame_index, frame in enumerate(context.frames()):
+                if frame.session_state == xr.SessionState.FOCUSED:
+                    # Get controller poses
+                    for index, space_location in two_controllers.enumerate_active_controllers(
+                            time=frame.frame_state.predicted_display_time,
+                            reference_space=context.reference_space,
+                    ):
+                        if space_location.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
+                            tx = xr.Matrix4x4f.create_translation_rotation_scale(
+                                translation=space_location.pose.position,
+                                rotation=space_location.pose.orientation,
+                                scale=[1.0],
+                            )
+                            controller_poses[index] = tx.as_numpy()
+                if frame.frame_state.should_render:
+                    for view in frame.views():
+                        GL.glClearColor(1, 0.7, 0.7, 1)  # pink
+                        GL.glClearDepth(1.0)
+                        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+                        render_context = xr.api2.RenderContext(view)
+                        for renderer in renderers:
+                            renderer.paint_gl(render_context)
+                        for controller_pose in controller_poses:
+                            # continue
+                            if controller_pose is None:
+                                continue
+                            for renderer in renderers:
+                                render_context.model_matrix = controller_pose
+                                renderer.paint_gl(render_context)
 
 
 if __name__ == "__main__":
     # show_controller()
     test()
+    # test2()
