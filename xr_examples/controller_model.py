@@ -188,6 +188,8 @@ class GltfPrimitive(object):
         self.vertex_attributes = []
         if att.POSITION is not None:
             self.vertex_attributes.append(GltfVertexAttribute(gltf_file, att.POSITION, 0))
+        if att.TEXCOORD_0 is not None:
+            self.vertex_attributes.append(GltfVertexAttribute(gltf_file, att.TEXCOORD_0, 1))
         self.element_buffer = None
         if primitive.indices is not None:
             self.element_buffer = GltfBuffer(gltf_file, primitive.indices, GL.GL_ELEMENT_ARRAY_BUFFER)
