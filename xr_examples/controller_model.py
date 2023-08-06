@@ -1,6 +1,7 @@
 import ctypes
 import inspect
 from io import BytesIO
+import math
 from typing import Dict
 
 import numpy
@@ -65,6 +66,12 @@ class GltfNode(object):
         self.node = gltf.nodes[node_index]
         self.children = []
         self.local_matrix = xr.Matrix4x4f.create_scale(1.0)
+        if self.node.mesh is not None:  # Temporary hack
+            self.local_matrix @= xr.Matrix4x4f.create_translation(0, 0.0010, -0.0270)
+            rotx = math.radians(-1.3)
+            c = math.cos(rotx)
+            s = math.sin(rotx)
+            self.local_matrix @= xr.Matrix4x4f.create_from_quaternion(xr.Quaternionf(s, 0, 0, c))
         if self.node.translation is not None:
             self.local_matrix @= xr.Matrix4x4f.create_translation(*self.node.translation)
         if self.node.rotation is not None:
@@ -75,7 +82,7 @@ class GltfNode(object):
             raise NotImplementedError
         self.node_stack = parent_node_stack + [self]
         self.global_matrix = xr.Matrix4x4f.create_scale(1)
-        for node in self.node_stack:
+        for node in self.node_stack:  # order seems correct here
             self.global_matrix @= node.local_matrix
         self.global_matrix = self.global_matrix.as_numpy()  # TODO: updatable matrix on node changes
         self.mesh = None
@@ -345,6 +352,7 @@ class ControllerRenderer(object):
             void main() {
               // fragColor = vec4(0, 1, 0, 1);  // green
               fragColor = texture(image, tex_coord);
+              fragColor = fragColor * fragColor;  // approximate srgb to linear
             }
             """), GL.GL_FRAGMENT_SHADER)
         self.shader = compileProgram(vertex_shader, fragment_shader)
