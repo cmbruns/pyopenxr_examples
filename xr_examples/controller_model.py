@@ -94,7 +94,7 @@ class GltfNode(object):
     def paint_gl(self, context: xr.api2.RenderContext):
         if self.mesh is None:
             return
-        self.mesh.paint_gl(context, self.global_matrix)
+        self.mesh.paint_gl(context)
 
 
 class GltfBuffer(object):
@@ -222,7 +222,7 @@ class GltfMesh(object):
         for primitive in self.primitives:
             primitive.init_gl()
 
-    def paint_gl(self, context, node_matrix):
+    def paint_gl(self, context):
         for primitive in self.primitives:
             primitive.paint_gl(context)
 
@@ -242,7 +242,6 @@ def print_node(node_index, gltf, indent=2, parent_node_stack=()):
 def test():
     glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
     glb = GLTF2().load(glb_filename)
-    print(public_dir(glb))
     for image_index, image in enumerate(glb.images):
         print("Image", image.name)
         texture = GltfTextureImage(glb, image_index)
@@ -251,8 +250,6 @@ def test():
         # print("Scene", scene.name)
         for node_index in scene.nodes:
             print_node(node_index, glb)
-    for animation in glb.animations:
-        print("Animation", public_dir(animation))
 
 
 def get_a_mesh_from_node(gltf, node):
@@ -268,7 +265,6 @@ def get_a_mesh_from_node(gltf, node):
 
 def get_a_mesh_from_gltf(gltf):
     for scene in gltf.scenes:
-        # print("Scene", scene.name)
         for node_index in scene.nodes:
             node = gltf.nodes[node_index]
             mesh = get_a_mesh_from_node(gltf, node)
@@ -296,9 +292,10 @@ class ControllerRenderer(object):
             layout(location = 0) uniform mat4 Projection = mat4(1);
             layout(location = 4) uniform mat4 View = mat4(1);
             layout(location = 8) uniform mat4 Model = mat4(1);
+            layout(location = 12) uniform mat4 NodeMatrix = mat4(1);
                 
             void main() {
-              gl_Position = Projection * View * Model * vec4(position, 1.0);
+              gl_Position = Projection * View * Model * NodeMatrix * vec4(position, 1.0);
             }
             """), GL.GL_VERTEX_SHADER)
         fragment_shader = compileShader(
@@ -322,6 +319,8 @@ class ControllerRenderer(object):
             GL.glUniformMatrix4fv(8, 1, False, self.identity_matrix)
         else:
             GL.glUniformMatrix4fv(8, 1, False, render_context.model_matrix)
+        if self.node.global_matrix is not None:
+            GL.glUniformMatrix4fv(12, 1, False, self.node.global_matrix)
         self.node.paint_gl(render_context)
 
 
@@ -330,7 +329,6 @@ def show_controller():
     glb = GLTF2().load(glb_filename)
     mesh = get_a_mesh_from_gltf(glb)
     assert mesh
-    print(mesh)
     vbuff = GltfMesh(glb, mesh)
     renderer = ControllerRenderer(vbuff)
     with xr.api2.XrContext(
@@ -376,10 +374,8 @@ def test2():
 
 def test():
     glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
-    # gltf = GLTF2().load(glb_filename)
     gltf_file = GltfFile(glb_filename)
     renderers = []
-    print(len(gltf_file.meshes))
     for node in gltf_file.mesh_nodes:
         renderers.append(ControllerRenderer(node))
         print(node.mesh.mesh)
