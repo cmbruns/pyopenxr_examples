@@ -7,7 +7,8 @@ import numpy
 from OpenGL import GL
 from OpenGL.GL.shaders import compileShader, compileProgram
 from PIL import Image
-from pygltflib import GLTF2
+import pygltflib
+from pygltflib import GLTF2, Mesh
 
 import xr.api2
 
@@ -23,6 +24,70 @@ type_to_dim: Dict[str, int] = {
     'VEC2': 2,
     'SCALAR': 1
 }
+
+
+# Wrapper classes with direct object references and OpenGL implementations
+
+
+class GltfFile(object):
+    def __init__(self, file):
+        self.gltf = GLTF2().load(file)
+        # Wrap with non-copying reference array
+        self.blob = numpy.frombuffer(self.gltf.binary_blob(), dtype=numpy.uint8)
+        self.accessors = self.gltf.accessors
+        self.nodes = {}  # TODO: separate node sets for separate instances
+        self.meshes = []
+        for mesh_index, mesh in enumerate(self.gltf.meshes):
+            self.meshes.append(GltfMesh(self, mesh_index))
+        self.scenes = []
+        for scene_index, scene in enumerate(self.gltf.scenes):
+            self.scenes.append(GltfScene(self, scene_index))
+
+
+class GltfScene(object):
+    def __init__(self, gltf_file: GltfFile, scene_index: int):
+        gltf = gltf_file.gltf
+        self.scene = gltf.scenes[scene_index]
+        self.nodes = []
+        for node_index in self.scene.nodes:
+            if node_index not in gltf_file.nodes:
+                gltf_file.nodes[node_index] = GltfNode(gltf_file, node_index)
+            self.nodes.append(gltf_file.nodes[node_index])
+
+
+class GltfNode(object):
+    def __init__(self, gltf_file: GltfFile, node_index: int):
+        gltf = gltf_file.gltf
+        self.index = node_index
+        self.node = gltf.nodes[node_index]
+        self.children = []
+        self.mesh = None
+        if self.node.mesh:
+            mesh_index = self.node.mesh
+            self.mesh = gltf_file.meshes[mesh_index]
+        for child_index in self.node.children:
+            self.children.append(GltfNode(gltf_file, child_index))
+
+
+class GltfBuffer(object):
+    def __init__(self, gltf_file: GltfFile, accessor_index, target):
+        gltf = gltf_file.gltf
+        self.target = target  # e.g. GL_ARRAY_BUFFER
+        self.accessor = gltf.accessors[accessor_index]
+        buffer_view = gltf.bufferViews[self.accessor.bufferView]
+        self.data = gltf_file.blob[buffer_view.byteOffset:buffer_view.byteOffset + buffer_view.byteLength]
+        self.buffer_view = buffer_view
+        self.gl_buffer = None
+
+    def init_gl(self):
+        self.gl_buffer = GL.glGenBuffers(1)
+        GL.glBindBuffer(self.target, self.gl_buffer)
+        GL.glBufferData(
+            target=self.target,
+            size=self.buffer_view.byteLength,
+            data=self.data,
+            usage=GL.GL_STATIC_DRAW,
+        )
 
 
 class GltfTextureImage(object):
@@ -68,38 +133,16 @@ class GltfTextureImage(object):
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
 
 
-class GltfBuffer(object):
-    def __init__(self, gltf, accessor_index, target):
-        self.target = target  # e.g. GL_ARRAY_BUFFER
-        self.accessor = gltf.accessors[accessor_index]
-        buffer_view = gltf.bufferViews[self.accessor.bufferView]
-        self.data = gltf.binary_blob()[buffer_view.byteOffset:buffer_view.byteOffset + buffer_view.byteLength]
-        self.buffer_view = buffer_view
-        self.gl_buffer = None
-
-    def init_gl(self):
-        self.gl_buffer = GL.glGenBuffers(1)
-        GL.glBindBuffer(self.target, self.gl_buffer)
-        GL.glBufferData(
-            target=self.target,
-            size=self.buffer_view.byteLength,
-            data=self.data,
-            usage=GL.GL_STATIC_DRAW,
-        )
-
-
-class GltfMesh(object):
-    def __init__(self, gltf: GLTF2, mesh) -> None:
-        self.gltf = gltf
-        self.mesh = mesh
-        self.primitive = mesh.primitives[0]  # TODO all the primitives
-        att = self.primitive.attributes
+class GltfPrimitive(object):
+    def __init__(self, gltf_file: GltfFile, primitive: pygltflib.Primitive) -> None:
+        att = primitive.attributes
         # TODO: separate positions object
         assert att.POSITION is not None
-        self.pos_buffer = GltfBuffer(gltf, att.POSITION, GL.GL_ARRAY_BUFFER)
+        self.pos_buffer = GltfBuffer(gltf_file, att.POSITION, GL.GL_ARRAY_BUFFER)
         self.element_buffer = None
-        if self.primitive.indices is not None:
-            self.element_buffer = GltfBuffer(gltf, self.primitive.indices, GL.GL_ELEMENT_ARRAY_BUFFER)
+        if primitive.indices is not None:
+            self.element_buffer = GltfBuffer(gltf_file, primitive.indices, GL.GL_ELEMENT_ARRAY_BUFFER)
+        self.primitive = primitive
         self.vao = None
         self.vert_buffer = None
 
@@ -136,6 +179,23 @@ class GltfMesh(object):
             )
         else:
             GL.glDrawArrays(self.primitive.mode, 0, self.pos_buffer.accessor.count)
+
+
+class GltfMesh(object):
+    def __init__(self, gltf_file: GLTF2, mesh_index) -> None:
+        gltf = gltf_file.gltf
+        mesh = gltf.meshes[mesh_index]
+        self.primitives = []
+        for primitive in mesh.primitives:
+            self.primitives.append(GltfPrimitive(gltf_file, primitive))
+
+    def init_gl(self):
+        for primitive in self.primitives:
+            primitive.init_gl()
+
+    def paint_gl(self, context):
+        for primitive in self.primitives:
+            primitive.paint_gl(context)
 
 
 def print_node(node_index, gltf, indent=2, parent_node_stack=()):
@@ -260,5 +320,36 @@ def show_controller():
                     renderer.paint_gl(render_context)
 
 
+def test():
+    glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
+    # gltf = GLTF2().load(glb_filename)
+    gltf_file = GltfFile(glb_filename)
+    renderers = []
+    for mesh in gltf_file.meshes:
+        renderers.append(ControllerRenderer(mesh))
+        # break  # OK just one for now
+    with xr.api2.XrContext(
+            instance_create_info=xr.InstanceCreateInfo(
+                enabled_extension_names=[
+                    # A graphics extension is mandatory (without a headless extension)
+                    xr.KHR_OPENGL_ENABLE_EXTENSION_NAME,
+                ],
+            ),
+    ) as context:
+        context.graphics_context.make_current()
+        for renderer in renderers:
+            renderer.init_gl()
+        for frame_index, frame in enumerate(context.frames()):
+            if frame.frame_state.should_render:
+                for view in frame.views():
+                    GL.glClearColor(1, 0.7, 0.7, 1)  # pink
+                    GL.glClearDepth(1.0)
+                    GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+                    render_context = xr.api2.RenderContext(view)
+                    for renderer in renderers:
+                        renderer.paint_gl(render_context)
+
+
 if __name__ == "__main__":
-    show_controller()
+    # show_controller()
+    test()
