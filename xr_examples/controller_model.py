@@ -176,13 +176,14 @@ class GltfVertexAttribute(object):
             ctypes.c_void_p(accessor.byteOffset)
         )
 
+    def disable(self):
+        GL.glDisableVertexAttribArray(self.location)
+
 
 class GltfPrimitive(object):
     def __init__(self, gltf_file: GltfFile, primitive: pygltflib.Primitive) -> None:
         gltf = gltf_file.gltf
         att = primitive.attributes
-        #
-        self.pos_buffer = GltfBuffer(gltf_file, att.POSITION, GL.GL_ARRAY_BUFFER)
         #
         self.vertex_attributes = []
         if att.POSITION is not None:
@@ -207,29 +208,16 @@ class GltfPrimitive(object):
     def init_gl(self):
         self.vao = GL.glGenVertexArrays(1)
         GL.glBindVertexArray(self.vao)
-        #
-        # for attribute in self.vertex_attributes:
-        #     attribute.init_gl()
-        #
-        location = 0  # TODO
-        GL.glEnableVertexAttribArray(location)
-        self.pos_buffer.init_gl()
-        acc = self.pos_buffer.accessor
-        GL.glVertexAttribPointer(
-            location,  # attribute index
-            type_to_dim[acc.type],
-            acc.componentType,
-            acc.normalized,
-            0,  # stride
-            ctypes.c_void_p(acc.byteOffset)
-        )
+        for attribute in self.vertex_attributes:
+            attribute.init_gl()
         if self.element_buffer is not None:
             self.element_buffer.init_gl()
         if self.texture_image is not None:
             self.texture_image.init_gl()
         GL.glBindVertexArray(0)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
-        GL.glDisableVertexAttribArray(location)
+        for attribute in self.vertex_attributes:
+            attribute.disable()
 
     def paint_gl(self, context):
         GL.glBindVertexArray(self.vao)
