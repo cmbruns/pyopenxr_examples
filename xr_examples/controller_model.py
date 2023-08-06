@@ -34,12 +34,14 @@ class GltfFile(object):
         self.gltf = GLTF2().load(file)
         # Wrap with numpy so slices will be references not copies
         self.blob = numpy.frombuffer(self.gltf.binary_blob(), dtype=numpy.uint8)
-        self.accessors = self.gltf.accessors
-        self.nodes = {}  # TODO: separate node sets for left and right controllers
+        self.images = []
+        for image_index, image in enumerate(self.gltf.images):
+            self.images.append(GltfTextureImage(self, image_index))
+        self.nodes = dict()
         self.meshes = []
         for mesh_index, mesh in enumerate(self.gltf.meshes):
             self.meshes.append(GltfMesh(self, mesh_index))
-        self.mesh_nodes = []
+        self.mesh_nodes = []  # to be filled in during node traversal
         self.scenes = []
         for scene_index, scene in enumerate(self.gltf.scenes):
             self.scenes.append(GltfScene(self, scene_index))
@@ -61,7 +63,6 @@ class GltfNode(object):
         gltf = gltf_file.gltf
         self.index = node_index
         self.node = gltf.nodes[node_index]
-        print(self.index, self.node)
         self.children = []
         self.local_matrix = xr.Matrix4x4f.create_scale(1.0)
         if self.node.translation is not None:
@@ -79,7 +80,6 @@ class GltfNode(object):
         self.global_matrix = self.global_matrix.as_numpy()  # TODO: updatable matrix on node changes
         self.mesh = None
         if self.node.mesh is not None:
-            print("  Mesh", self.node.mesh)
             mesh_index = self.node.mesh
             self.mesh = gltf_file.meshes[mesh_index]
             gltf_file.mesh_nodes.append(self)
@@ -119,17 +119,16 @@ class GltfBuffer(object):
 
 
 class GltfTextureImage(object):
-    def __init__(self, gltf: GLTF2, image_index: int):
-        self.gltf_image_index = image_index
+    def __init__(self, gltf_file: GltfFile, image_index: int):
+        gltf = gltf_file.gltf
         gltf_image = gltf.images[image_index]
-        self.name = gltf_image.name
         self.buffer_view = gltf.bufferViews[gltf_image.bufferView]
-        blob = gltf.binary_blob()
+        blob = gltf_file.blob
         png_data = blob[self.buffer_view.byteOffset:self.buffer_view.byteOffset + self.buffer_view.byteLength]
         self.pil_img = Image.open(BytesIO(png_data))
-        # img.show()
+        # self.pil_img.show()
         # TODO non-8bit pixel depths
-        self.numpy_data = numpy.array(self.pil_img.getdata(), dtype=numpy.uint8).flatten()
+        self.numpy_data = numpy.array(self.pil_img.getdata(), dtype=numpy.uint8).flatten()  # Takes a moment...
         self.gl_buffer_id = None
         self.texture_id = None
 
@@ -137,8 +136,6 @@ class GltfTextureImage(object):
         self.texture_id = GL.glGenTextures(1)
         # GL.glPixelStorei(GL.GL_UNPACK_ALIGNMENT, 1)
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
-        # TODO: texture format
-        GL.glTexBuffer(GL.GL_TEXTURE_BUFFER, GL.GL_RGB, self.gl_buffer_id)
         GL.glTexParameterf(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_S, GL.GL_CLAMP_TO_EDGE)
         GL.glTexParameterf(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_WRAP_T, GL.GL_CLAMP_TO_EDGE)
         GL.glTexParameteri(GL.GL_TEXTURE_2D, GL.GL_TEXTURE_MAG_FILTER, GL.GL_NEAREST)
@@ -146,7 +143,7 @@ class GltfTextureImage(object):
         GL.glTexImage2D(
             GL.GL_TEXTURE_2D,
             0,
-            GL.GL_RGB,  #
+            GL.GL_RGB,  # TODO: other formats
             self.pil_img.width,
             self.pil_img.height,
             0,
@@ -161,15 +158,48 @@ class GltfTextureImage(object):
         GL.glBindTexture(GL.GL_TEXTURE_2D, self.texture_id)
 
 
+class GltfVertexAttribute(object):
+    def __init__(self, gltf_file, attribute_index: int, location: int):
+        self.location = location
+        self.buffer = GltfBuffer(gltf_file, attribute_index, GL.GL_ARRAY_BUFFER)
+
+    def init_gl(self):
+        GL.glEnableVertexAttribArray(self.location)
+        self.buffer.init_gl()
+        accessor = self.buffer.accessor
+        GL.glVertexAttribPointer(
+            self.location,  # attribute index
+            type_to_dim[accessor.type],
+            accessor.componentType,
+            accessor.normalized,
+            0,  # stride
+            ctypes.c_void_p(accessor.byteOffset)
+        )
+
+
 class GltfPrimitive(object):
     def __init__(self, gltf_file: GltfFile, primitive: pygltflib.Primitive) -> None:
+        gltf = gltf_file.gltf
         att = primitive.attributes
-        # TODO: separate positions object
-        assert att.POSITION is not None
+        #
         self.pos_buffer = GltfBuffer(gltf_file, att.POSITION, GL.GL_ARRAY_BUFFER)
+        #
+        self.vertex_attributes = []
+        if att.POSITION is not None:
+            self.vertex_attributes.append(GltfVertexAttribute(gltf_file, att.POSITION, 0))
         self.element_buffer = None
         if primitive.indices is not None:
             self.element_buffer = GltfBuffer(gltf_file, primitive.indices, GL.GL_ELEMENT_ARRAY_BUFFER)
+        self.texture_image = None
+        if att.TEXCOORD_0 is not None and primitive.material is not None:
+            material_index = primitive.material
+            material = gltf.materials[material_index]
+            # TODO: we are skipping a lot of properties here...
+            pbr_metallic_roughness = material.pbrMetallicRoughness
+            base_color_texture = pbr_metallic_roughness.baseColorTexture
+            texture = gltf.textures[base_color_texture.index]
+            self.texture_image = GltfTextureImage(gltf_file, texture.source)
+            x = 3
         self.primitive = primitive
         self.vao = None
         self.vert_buffer = None
@@ -177,6 +207,10 @@ class GltfPrimitive(object):
     def init_gl(self):
         self.vao = GL.glGenVertexArrays(1)
         GL.glBindVertexArray(self.vao)
+        #
+        # for attribute in self.vertex_attributes:
+        #     attribute.init_gl()
+        #
         location = 0  # TODO
         GL.glEnableVertexAttribArray(location)
         self.pos_buffer.init_gl()
@@ -191,12 +225,16 @@ class GltfPrimitive(object):
         )
         if self.element_buffer is not None:
             self.element_buffer.init_gl()
+        if self.texture_image is not None:
+            self.texture_image.init_gl()
         GL.glBindVertexArray(0)
         GL.glBindBuffer(GL.GL_ARRAY_BUFFER, 0)
-        GL.glDisableVertexAttribArray(0)
+        GL.glDisableVertexAttribArray(location)
 
     def paint_gl(self, context):
         GL.glBindVertexArray(self.vao)
+        if self.texture_image is not None:
+            self.texture_image.bind()
         if self.element_buffer is not None:
             acc = self.element_buffer.accessor
             GL.glDrawElements(
@@ -276,36 +314,47 @@ def get_a_mesh_from_gltf(gltf):
 class ControllerRenderer(object):
     identity_matrix = xr.Matrix4x4f.create_scale(1).as_numpy()
 
-    def __init__(self, node: GltfNode):
-        self.node = node
+    def __init__(self, nodes: list[GltfNode]):
+        self.nodes = nodes
         self.shader = None
+        self.model_matrix = self.identity_matrix
 
     def init_gl(self):
-        self.node.init_gl()
+        for node in self.nodes:
+            node.init_gl()
         vertex_shader = compileShader(
             inspect.cleandoc("""
             #version 430
-            #line 180
+            #line 303
 
-            in vec3 position;
+            layout(location = 0) in vec3 position_in;
+            layout(location = 1) in vec2 tex_coord_in;
 
             layout(location = 0) uniform mat4 Projection = mat4(1);
             layout(location = 4) uniform mat4 View = mat4(1);
             layout(location = 8) uniform mat4 Model = mat4(1);
             layout(location = 12) uniform mat4 NodeMatrix = mat4(1);
-                
+            
+            out vec2 tex_coord;
+            
             void main() {
-              gl_Position = Projection * View * Model * NodeMatrix * vec4(position, 1.0);
+              gl_Position = Projection * View * Model * NodeMatrix * vec4(position_in, 1.0);
+              tex_coord = tex_coord_in;
             }
             """), GL.GL_VERTEX_SHADER)
         fragment_shader = compileShader(
             inspect.cleandoc("""
             #version 430
+            #line 323
 
-            out vec4 FragColor;
+            uniform sampler2D image;
+            in vec2 tex_coord;
+            
+            out vec4 fragColor;
 
             void main() {
-              FragColor = vec4(0, 1, 0, 1);  // green
+              // fragColor = vec4(0, 1, 0, 1);  // green
+              fragColor = texture(image, tex_coord);
             }
             """), GL.GL_FRAGMENT_SHADER)
         self.shader = compileProgram(vertex_shader, fragment_shader)
@@ -315,13 +364,10 @@ class ControllerRenderer(object):
         GL.glUseProgram(self.shader)
         GL.glUniformMatrix4fv(0, 1, False, render_context.projection_matrix)
         GL.glUniformMatrix4fv(4, 1, False, render_context.view_matrix)
-        if render_context.model_matrix is None:
-            GL.glUniformMatrix4fv(8, 1, False, self.identity_matrix)
-        else:
-            GL.glUniformMatrix4fv(8, 1, False, render_context.model_matrix)
-        if self.node.global_matrix is not None:
-            GL.glUniformMatrix4fv(12, 1, False, self.node.global_matrix)
-        self.node.paint_gl(render_context)
+        GL.glUniformMatrix4fv(8, 1, False, self.model_matrix)
+        for node in self.nodes:
+            GL.glUniformMatrix4fv(12, 1, False, node.global_matrix)
+            node.paint_gl(render_context)
 
 
 def show_controller():
@@ -375,11 +421,8 @@ def test2():
 def test():
     glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
     gltf_file = GltfFile(glb_filename)
-    renderers = []
-    for node in gltf_file.mesh_nodes:
-        renderers.append(ControllerRenderer(node))
-        print(node.mesh.mesh)
-        # break  # OK just one for now
+    renderers = [ControllerRenderer(gltf_file.mesh_nodes),  # left controller
+                 ControllerRenderer(gltf_file.mesh_nodes), ]  # right controller
     with xr.api2.XrContext(
             instance_create_info=xr.InstanceCreateInfo(
                 enabled_extension_names=[
@@ -423,14 +466,11 @@ def test():
                         GL.glClearDepth(1.0)
                         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
                         render_context = xr.api2.RenderContext(view)
-                        for renderer in renderers:
-                            renderer.paint_gl(render_context)
                         for controller_pose in controller_poses:
-                            # continue
                             if controller_pose is None:
                                 continue
                             for renderer in renderers:
-                                render_context.model_matrix = controller_pose
+                                renderer.model_matrix = controller_pose
                                 renderer.paint_gl(render_context)
 
 
