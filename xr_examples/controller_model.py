@@ -1,3 +1,4 @@
+import concurrent.futures
 import ctypes
 import inspect
 from io import BytesIO
@@ -262,52 +263,6 @@ class GltfMesh(object):
             primitive.paint_gl(context)
 
 
-def print_node(node_index, gltf, indent=2, parent_node_stack=()):
-    node = gltf.nodes[node_index]
-    print(" " * indent, "Node", node.name, node.rotation, node.translation, public_dir(node))
-    node_stack = (*parent_node_stack, node)
-    if node.mesh is not None:
-        mesh = gltf.meshes[node.mesh]
-        print(" " * (indent + 2), "Mesh", mesh.name)
-        vertex_buffer = GltfMesh(gltf, mesh)
-    for child_index in node.children:
-        print_node(child_index, gltf, indent + 2, node_stack)
-
-
-def test():
-    glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
-    glb = GLTF2().load(glb_filename)
-    for image_index, image in enumerate(glb.images):
-        print("Image", image.name)
-        texture = GltfTextureImage(glb, image_index)
-        # texture.pil_img.show()
-    for scene in glb.scenes:
-        # print("Scene", scene.name)
-        for node_index in scene.nodes:
-            print_node(node_index, glb)
-
-
-def get_a_mesh_from_node(gltf, node):
-    if node.mesh is not None:
-        return gltf.meshes[node.mesh]
-    for child_index in node.children:
-        child = gltf.nodes[child_index]
-        mesh = get_a_mesh_from_node(gltf, child)
-        if mesh is not None:
-            return mesh
-    return None
-
-
-def get_a_mesh_from_gltf(gltf):
-    for scene in gltf.scenes:
-        for node_index in scene.nodes:
-            node = gltf.nodes[node_index]
-            mesh = get_a_mesh_from_node(gltf, node)
-            if mesh is not None:
-                return mesh
-    return None
-
-
 class ControllerRenderer(object):
     identity_matrix = xr.Matrix4x4f.create_scale(1).as_numpy()
 
@@ -359,6 +314,8 @@ class ControllerRenderer(object):
         GL.glEnable(GL.GL_DEPTH_TEST)
 
     def paint_gl(self, render_context):
+        if self.shader is None:
+            self.init_gl()
         GL.glUseProgram(self.shader)
         GL.glUniformMatrix4fv(0, 1, False, render_context.projection_matrix)
         GL.glUniformMatrix4fv(4, 1, False, render_context.view_matrix)
@@ -368,59 +325,19 @@ class ControllerRenderer(object):
             node.paint_gl(render_context)
 
 
-def show_controller():
-    glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
-    glb = GLTF2().load(glb_filename)
-    mesh = get_a_mesh_from_gltf(glb)
-    assert mesh
-    vbuff = GltfMesh(glb, mesh)
-    renderer = ControllerRenderer(vbuff)
-    with xr.api2.XrContext(
-            instance_create_info=xr.InstanceCreateInfo(
-                enabled_extension_names=[
-                    # A graphics extension is mandatory (without a headless extension)
-                    xr.KHR_OPENGL_ENABLE_EXTENSION_NAME,
-                ],
-            ),
-    ) as context:
-        context.graphics_context.make_current()
-        renderer.init_gl()
-        for frame_index, frame in enumerate(context.frames()):
-            if frame.frame_state.should_render:
-                for view in frame.views():
-                    GL.glClearColor(1, 0.7, 0.7, 1)  # pink
-                    GL.glClearDepth(1.0)
-                    GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-                    render_context = xr.api2.RenderContext(view)
-                    renderer.paint_gl(render_context)
-
-
-def print_node(gltf, node_index, indent=" "):
-    node = gltf.nodes[node_index]
-    print(indent, node_index, "Node", node.name)
-    if node_index == 2:
-        print(indent, node_index, node)
-    if node.mesh is not None:
-        mesh = gltf.meshes[node.mesh]
-        print(indent + "  ", node.mesh, mesh)
-    for child_index in node.children:
-        print_node(gltf, child_index, indent + "  ")
-
-
-def test2():
-    glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
-    glb = GLTF2().load(glb_filename)
-    for scene in glb.scenes:
-        print(scene)
-        for node_index in scene.nodes:
-            print_node(glb, node_index, "  ")
-
-
-def test():
+def load_glb(_interaction_profile):
     glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
     gltf_file = GltfFile(glb_filename)
     renderers = [ControllerRenderer(gltf_file.mesh_nodes),  # left controller
                  ControllerRenderer(gltf_file.mesh_nodes), ]  # right controller
+    return renderers
+
+
+def test():
+    renderers = [
+        xr.api2.ColorCubeRenderer(),
+        xr.api2.ColorCubeRenderer(),
+    ]
     with xr.api2.XrContext(
             instance_create_info=xr.InstanceCreateInfo(
                 enabled_extension_names=[
@@ -431,7 +348,6 @@ def test():
     ) as context:
         instance, session = context.instance, context.session
         context.graphics_context.make_current()
-        controller_poses = [None, None]
         for renderer in renderers:
             renderer.init_gl()
         with xr.api2.TwoControllers(
@@ -444,32 +360,60 @@ def test():
                     action_sets=[two_controllers.action_set],
                 ),
             )
-            for frame_index, frame in enumerate(context.frames()):
-                if frame.session_state == xr.SessionState.FOCUSED:
-                    # Get controller poses
-                    for index, space_location in two_controllers.enumerate_active_controllers(
-                            time=frame.frame_state.predicted_display_time,
-                            reference_space=context.reference_space,
-                    ):
-                        if space_location.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
-                            tx = xr.Matrix4x4f.create_translation_rotation_scale(
-                                translation=space_location.pose.position,
-                                rotation=space_location.pose.orientation,
-                                scale=[1.0],
-                            )
-                            controller_poses[index] = tx.as_numpy()
-                if frame.frame_state.should_render:
-                    for view in frame.views():
-                        GL.glClearColor(1, 0.7, 0.7, 1)  # pink
-                        GL.glClearDepth(1.0)
-                        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-                        render_context = xr.api2.RenderContext(view)
-                        for controller_pose in controller_poses:
-                            if controller_pose is None:
-                                continue
-                            for renderer in renderers:
-                                renderer.model_matrix = controller_pose
-                                renderer.paint_gl(render_context)
+            top_paths = [
+                xr.string_to_path(instance, "/user/hand/left"),
+                xr.string_to_path(instance, "/user/hand/right"),
+            ]
+            interaction_profile_found = False
+            controllers_loaded = False
+            interaction_profile = None
+            with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
+                load_future = None
+                for frame_index, frame in enumerate(context.frames()):
+                    controller_poses = [None, None]  # Don't render controllers if their positions are unavailable
+                    if frame.session_state == xr.SessionState.FOCUSED:
+                        # Get controller poses
+                        for index, space_location in two_controllers.enumerate_active_controllers(
+                                time=frame.frame_state.predicted_display_time,
+                                reference_space=context.reference_space,
+                        ):
+                            if space_location.location_flags & xr.SPACE_LOCATION_POSITION_VALID_BIT:
+                                tx = xr.Matrix4x4f.create_translation_rotation_scale(
+                                    translation=space_location.pose.position,
+                                    rotation=space_location.pose.orientation,
+                                    scale=[1.0],
+                                )
+                                controller_poses[index] = tx.as_numpy()
+                    if not interaction_profile_found:
+                        for index in range(2):
+                            if not interaction_profile_found:
+                                profile_state = xr.get_current_interaction_profile(session, top_paths[index])
+                                if profile_state.interaction_profile != 0:
+                                    interaction_profile = xr.path_to_string(instance, profile_state.interaction_profile)
+                                    print(interaction_profile)
+                                    interaction_profile_found = True
+                                    load_future = executor.submit(load_glb, interaction_profile)
+                                    print("Starting to load controllers")
+                    if interaction_profile_found and not controllers_loaded:
+                        if load_future.done():
+                            renderers[:] = load_future.result()
+                            controllers_loaded = True
+                            print("Controllers loaded!")
+                        else:
+                            if frame_index % 100 == 0:
+                                print("Waiting on controllers to load")
+                    if frame.frame_state.should_render:
+                        for view in frame.views():
+                            GL.glClearColor(1, 0.7, 0.7, 1)  # pink
+                            GL.glClearDepth(1.0)
+                            GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+                            render_context = xr.api2.RenderContext(view)
+                            for controller_pose in controller_poses:
+                                if controller_pose is None:
+                                    continue
+                                for renderer in renderers:
+                                    renderer.model_matrix = controller_pose
+                                    renderer.paint_gl(render_context)
 
 
 if __name__ == "__main__":
