@@ -1,11 +1,15 @@
 import concurrent.futures
+import cProfile
 import ctypes
 import inspect
 from io import BytesIO
 import math
+from pstats import SortKey
 from typing import Dict
 
 import numpy
+import OpenGL
+# OpenGL.ERROR_CHECKING = False  # Risky
 from OpenGL import GL
 from OpenGL.GL.shaders import compileShader, compileProgram
 from PIL import Image
@@ -13,6 +17,8 @@ import pygltflib
 from pygltflib import GLTF2, Mesh
 
 import xr.api2
+
+
 
 
 def public_dir(thing):
@@ -370,6 +376,8 @@ def test():
             with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
                 load_future = None
                 for frame_index, frame in enumerate(context.frames()):
+                    if frame_index > 5000:
+                        break
                     controller_poses = [None, None]  # Don't render controllers if their positions are unavailable
                     if frame.session_state == xr.SessionState.FOCUSED:
                         # Get controller poses
@@ -419,4 +427,5 @@ def test():
 if __name__ == "__main__":
     # show_controller()
     test()
+    # cProfile.run("test()", sort=SortKey.TIME)
     # test2()
