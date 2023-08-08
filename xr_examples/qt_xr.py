@@ -21,7 +21,7 @@ class IRenderer(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def render_scene(self, context):
+    def paint_gl(self, context):
         pass
 
 
@@ -29,20 +29,33 @@ class NothingRenderer(IRenderer):
     def init_gl(self):
         pass
 
-    def render_scene(self, context):
+    def paint_gl(self, context):
         pass
 
 
 class PinkWorldRenderer(IRenderer):
     def init_gl(self):
-        pass
+        GL.glClearDepth(1.0)
 
-    def render_scene(self, context):
+    def paint_gl(self, context):
         if context.color_space == xr.api2.ColorSpace.LINEAR:
             GL.glClearColor(1, 0.7, 0.7, 1)  # pink
         else:  # srgb
             GL.glClearColor(1, 0.85, 0.85, 1)  # pink
-        GL.glClear(GL.GL_COLOR_BUFFER_BIT)
+        GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
+
+
+class CompositeRenderer(IRenderer):
+    def __init__(self, renderers: list):
+        self.renderers = renderers
+
+    def init_gl(self):
+        for renderer in self.renderers:
+            renderer.init_gl()
+
+    def paint_gl(self, context):
+        for renderer in self.renderers:
+            renderer.paint_gl(context)
 
 
 class QtGLContext(xr.api2.IGLContext):
@@ -145,7 +158,7 @@ class XrGlQtRenderer(object):
         if self.scene_renderer is not None:
             self.scene_renderer.init_gl()
 
-    def render_scene(self):
+    def paint_gl(self):
         if self.scene_renderer is None:
             return
         for frame in self.session_manager.frame():  # zero or one frame
@@ -157,7 +170,7 @@ class XrGlQtRenderer(object):
                     color_space=self.swapchains.color_space
                 )
                 self.latest_render_context = render_context
-                self.scene_renderer.render_scene(render_context)
+                self.scene_renderer.paint_gl(render_context)
 
 
 class MyGlWidget(QtOpenGLWidgets.QOpenGLWidget):
@@ -173,6 +186,7 @@ class MyGlWidget(QtOpenGLWidgets.QOpenGLWidget):
         self.setFocusPolicy(Qt.StrongFocus)
         self.render_context = xr.api2.RenderContext(color_space=xr.api2.ColorSpace.SRGB)
         self.xr_renderer = XrGlQtRenderer(renderer)
+        self.do_mirror = True
 
     def initializeGL(self):
         self.xr_renderer.graphics_context = QtGLContext(self)
@@ -188,14 +202,19 @@ class MyGlWidget(QtOpenGLWidgets.QOpenGLWidget):
             QtCore.QCoreApplication.quit()
 
     def paintGL(self):
-        print("paintGL")
-        self.renderer.render_scene(self.render_context)
+        if not self.do_mirror:
+            return
+        self.renderer.paint_gl(self.render_context)
 
     def render_vr(self):
         self.makeCurrent()
-        self.xr_renderer.render_scene()
+        self.xr_renderer.paint_gl()
         self.doneCurrent()
         self.render_context.view_matrix = self.xr_renderer.latest_render_context.view_matrix
+        # TODO: the projection matrix is not quite right
+        self.render_context.projection_matrix = self.xr_renderer.latest_render_context.projection_matrix
+        if self.do_mirror:
+            self.update()
         self.timer.start()  # render again real soon now
 
 
@@ -228,7 +247,10 @@ class NullGraphicsContext(xr.api2.IGLContext):
 
 
 def main():
-    renderer = PinkWorldRenderer()
+    renderer = CompositeRenderer([
+        PinkWorldRenderer(),
+        xr.api2.ColorCubeRenderer(model_matrix=xr.Matrix4x4f.create_scale(0.2).as_numpy()),
+    ])
     app = QtApp(renderer)
     result = app.exec()
     sys.exit(result)
