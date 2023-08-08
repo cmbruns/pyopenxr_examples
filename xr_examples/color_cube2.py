@@ -33,5 +33,5 @@ with xr.api2.XrContext(
                 for view in frame.views():
                     context.graphics_context.make_current()
                     GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-                    render_context = xr.api2.RenderContext(view)
+                    render_context = xr.api2.RenderContext.from_view(view)
                     floor_cube.paint_gl(render_context)

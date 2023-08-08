@@ -38,7 +38,7 @@ def main():
                 ),
             )
             for frame_index, frame in enumerate(context.frames()):
-                if frame_index > 1000:
+                if frame_index > 5000:
                     break
                 for c in controller_cubes:
                     c.do_show = False
@@ -63,7 +63,7 @@ def main():
                         GL.glClearColor(1, 0.7, 0.7, 1)  # pink
                         GL.glClearDepth(1.0)
                         GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-                        render_context = xr.api2.RenderContext(view)
+                        render_context = xr.api2.RenderContext.from_view(view)
                         floor_cube.paint_gl(render_context)
                         for c in controller_cubes:
                             if c.do_show:

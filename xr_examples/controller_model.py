@@ -142,7 +142,9 @@ class GltfTextureImage(object):
         self.pil_img = Image.open(BytesIO(png_data))
         # self.pil_img.show()
         # TODO non-8bit pixel depths
-        self.numpy_data = numpy.array(self.pil_img.getdata(), dtype=numpy.uint8).flatten()  # Takes a moment...
+        srgb = numpy.asarray(self.pil_img, dtype=numpy.float32) / 255.0  # Faster than numpy.array(pil_img.getdata())
+        linear = numpy.where(srgb >= 0.04045, ((srgb + 0.055) / 1.055)**2.4, srgb/12.92)
+        self.numpy_data = linear.flatten()
         self.gl_buffer_id = None
         self.texture_id = None
 
@@ -162,7 +164,7 @@ class GltfTextureImage(object):
             self.pil_img.height,
             0,
             GL.GL_RGB,  #
-            GL.GL_UNSIGNED_BYTE,
+            GL.GL_FLOAT,
             self.numpy_data,
         )
         GL.glGenerateMipmap(GL.GL_TEXTURE_2D)
@@ -215,7 +217,7 @@ class GltfPrimitive(object):
             pbr_metallic_roughness = material.pbrMetallicRoughness
             base_color_texture = pbr_metallic_roughness.baseColorTexture
             texture = gltf.textures[base_color_texture.index]
-            self.texture_image = GltfTextureImage(gltf_file, texture.source)
+            self.texture_image = gltf_file.images[texture.source]
             x = 3
         self.primitive = primitive
         self.vao = None
@@ -313,7 +315,6 @@ class ControllerRenderer(object):
             void main() {
               // fragColor = vec4(0, 1, 0, 1);  // green
               fragColor = texture(image, tex_coord);
-              fragColor = fragColor * fragColor;  // approximate srgb to linear
             }
             """), GL.GL_FRAGMENT_SHADER)
         self.shader = compileProgram(vertex_shader, fragment_shader)
@@ -339,10 +340,12 @@ def load_glb(_interaction_profile):
     return renderers
 
 
-def test():
+def show_controllers():
+    # Display temporary placeholder cube renderers until the full glb models are loaded
+    local_matrix = xr.Matrix4x4f.create_scale(0.1).as_numpy()
     renderers = [
-        xr.api2.ColorCubeRenderer(),
-        xr.api2.ColorCubeRenderer(),
+        xr.api2.ColorCubeRenderer(local_matrix=local_matrix),
+        xr.api2.ColorCubeRenderer(local_matrix=local_matrix),
     ]
     with xr.api2.XrContext(
             instance_create_info=xr.InstanceCreateInfo(
@@ -372,7 +375,6 @@ def test():
             ]
             interaction_profile_found = False
             controllers_loaded = False
-            interaction_profile = None
             with concurrent.futures.ProcessPoolExecutor(max_workers=1) as executor:
                 load_future = None
                 for frame_index, frame in enumerate(context.frames()):
@@ -415,7 +417,7 @@ def test():
                             GL.glClearColor(1, 0.7, 0.7, 1)  # pink
                             GL.glClearDepth(1.0)
                             GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
-                            render_context = xr.api2.RenderContext(view)
+                            render_context = xr.api2.RenderContext.from_view(view)
                             for controller_pose in controller_poses:
                                 if controller_pose is None:
                                     continue
@@ -425,7 +427,6 @@ def test():
 
 
 if __name__ == "__main__":
-    # show_controller()
-    test()
-    # cProfile.run("test()", sort=SortKey.TIME)
-    # test2()
+    show_controllers()
+    # load_glb("foo")
+    # cProfile.run("show_controllers()", sort=SortKey.TIME)
