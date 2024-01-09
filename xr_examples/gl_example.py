@@ -115,7 +115,7 @@ class OpenXrExample(object):
         self.logger = logging.getLogger("gl_example")
         self.logger.setLevel(log_level)
         self.debug_callback = xr.PFN_xrDebugUtilsMessengerCallbackEXT(self.debug_callback_py)
-        self.mirror_window = False
+        self.mirror_window = True
         self.instance = None
         self.system_id = None
         self.pxrCreateDebugUtilsMessengerEXT = None
