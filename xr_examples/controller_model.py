@@ -4,21 +4,20 @@ import ctypes
 import inspect
 from io import BytesIO
 import math
+import pkg_resources
 from pstats import SortKey
 from typing import Dict
 
 import numpy
 import OpenGL
-# OpenGL.ERROR_CHECKING = False  # Risky
+# OpenGL.ERROR_CHECKING = False  # faster but risky
 from OpenGL import GL
 from OpenGL.GL.shaders import compileShader, compileProgram
 from PIL import Image
 import pygltflib
-from pygltflib import GLTF2, Mesh
+from pygltflib import GLTF2
 
 import xr.api2
-
-
 
 
 def public_dir(thing):
@@ -73,7 +72,8 @@ class GltfNode(object):
         self.node = gltf.nodes[node_index]
         self.children = []
         self.local_matrix = xr.Matrix4x4f.create_scale(1.0)
-        if self.node.mesh is not None:  # Temporary hack
+        # TODO make this hack much more specific for the certain vive controller model only
+        if False and self.node.mesh is not None:  # Temporary hack
             self.local_matrix @= xr.Matrix4x4f.create_translation(0, 0.0010, -0.0270)
             rotx = math.radians(-1.3)
             c = math.cos(rotx)
@@ -332,11 +332,22 @@ class ControllerRenderer(object):
             node.paint_gl(render_context)
 
 
-def load_glb(_interaction_profile):
-    glb_filename = "C:/Users/cmbruns/Documents/git/webxr-input-profiles/packages/assets/profiles/htc-vive/none.glb"
-    gltf_file = GltfFile(glb_filename)
-    renderers = [ControllerRenderer(gltf_file.mesh_nodes),  # left controller
-                 ControllerRenderer(gltf_file.mesh_nodes), ]  # right controller
+def load_glb(interaction_profile: str = "", system_name: str = ""):
+    if system_name in [
+        "Oculus Quest2",
+        b"Oculus Quest2",
+    ] or interaction_profile in [
+        "/interaction_profiles/oculus/touch_controller"
+    ]:
+        left_file_name = pkg_resources.resource_filename("xr.api2.profiles.oculus-touch-v3", "left.glb")
+        left_gltf = GltfFile(left_file_name)
+        right_file_name = pkg_resources.resource_filename("xr.api2.profiles.oculus-touch-v3", "right.glb")
+        right_gltf = GltfFile(right_file_name)
+    else:
+        glb_filename = pkg_resources.resource_filename("xr.api2.profiles.htc-vive", "none.glb")
+        left_gltf = right_gltf = GltfFile(glb_filename)
+    renderers = [ControllerRenderer(left_gltf.mesh_nodes),  # left controller
+                 ControllerRenderer(right_gltf.mesh_nodes), ]  # right controller
     return renderers
 
 
@@ -356,6 +367,8 @@ def show_controllers():
             ),
     ) as context:
         instance, session = context.instance, context.session
+        system_name = xr.get_system_properties(instance, context.system_id).system_name
+        print(system_name)
         context.graphics_context.make_current()
         for renderer in renderers:
             renderer.init_gl()
@@ -402,7 +415,7 @@ def show_controllers():
                                     interaction_profile = xr.path_to_string(instance, profile_state.interaction_profile)
                                     print(interaction_profile)
                                     interaction_profile_found = True
-                                    load_future = executor.submit(load_glb, interaction_profile)
+                                    load_future = executor.submit(load_glb, interaction_profile, system_name)
                                     print("Starting to load controllers")
                     if interaction_profile_found and not controllers_loaded:
                         if load_future.done():
@@ -418,15 +431,15 @@ def show_controllers():
                             GL.glClearDepth(1.0)
                             GL.glClear(GL.GL_COLOR_BUFFER_BIT | GL.GL_DEPTH_BUFFER_BIT)
                             render_context = xr.api2.RenderContext.from_view(view)
-                            for controller_pose in controller_poses:
+                            for controller_index, controller_pose in enumerate(controller_poses):
                                 if controller_pose is None:
                                     continue
-                                for renderer in renderers:
-                                    renderer.model_matrix = controller_pose
-                                    renderer.paint_gl(render_context)
+                                rend = renderers[controller_index]
+                                rend.model_matrix = controller_pose
+                                rend.paint_gl(render_context)
 
 
 if __name__ == "__main__":
     show_controllers()
-    # load_glb("foo")
+    # load_glb(system_name=b'Oculus Quest2')
     # cProfile.run("show_controllers()", sort=SortKey.TIME)
