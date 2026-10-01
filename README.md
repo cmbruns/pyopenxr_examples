@@ -1,3 +1,17 @@
+# pyopenxr_examples -- merged into pyopenxr
+
+> **This repository has been merged back into
+> [cmbruns/pyopenxr](https://github.com/cmbruns/pyopenxr).**
+> The examples now live at
+> [`examples/`](https://github.com/cmbruns/pyopenxr/tree/main/examples)
+> in that repository, along with this repository's full history.
+>
+> This repository is kept for reference but is no longer updated.
+> Please open issues and pull requests against
+> [cmbruns/pyopenxr](https://github.com/cmbruns/pyopenxr) instead.
+
+---
+
 # pyopenxr_examples
 
 Sample programs using the pyopenxr python AR/VR bindings from https://github.com/cmbruns/pyopenxr
